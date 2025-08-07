@@ -6,9 +6,17 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
+const cloudinary = require('cloudinary').v2;
 
 app.use(express.json());
 app.use(cors());
+
+// Configure Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // MongoDB connection using native driver
 const mongoUri = process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarche0212@cluster0.wj9jly9.mongodb.net/e-commerce";
@@ -100,8 +108,8 @@ const upload = multer({
     }
 });
 
-// API for uploading images - simplified for now
-app.post("/upload", upload.single("product"), (req, res) => {
+// API for uploading images to Cloudinary
+app.post("/upload", upload.single("product"), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({
@@ -110,19 +118,36 @@ app.post("/upload", upload.single("product"), (req, res) => {
             });
         }
         
-        // For now, return a placeholder URL
-        // In production, you'd upload to a cloud service like Cloudinary
-        const imageUrl = `${process.env.BASE_URL || `https://ecommerce-backend-indol-xi.vercel.app`}/images/placeholder.jpg`;
+        // Upload to Cloudinary using buffer
+        const uploadResponse = await new Promise((resolve, reject) => {
+            cloudinary.uploader.upload_stream(
+                {
+                    folder: "ecommerce-products",
+                    resource_type: "image",
+                    transformation: [
+                        { width: 400, height: 400, crop: "fill" },
+                        { quality: "auto", format: "auto" }
+                    ]
+                },
+                (error, result) => {
+                    if (error) reject(error);
+                    else resolve(result);
+                }
+            ).end(req.file.buffer);
+        });
         
         res.json({
             success: true,
-            imageUrl: imageUrl
+            imageUrl: uploadResponse.secure_url,
+            public_id: uploadResponse.public_id
         });
+        
     } catch (error) {
         console.error("Upload error:", error);
         res.status(500).json({
             success: false,
-            message: "Upload failed"
+            message: "Upload failed",
+            error: error.message
         });
     }
 });
