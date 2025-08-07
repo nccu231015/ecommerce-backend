@@ -15,12 +15,14 @@ const mongoUri = process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarch
 console.log("Attempting to connect to MongoDB...");
 
 const mongoOptions = {
-    serverSelectionTimeoutMS: 30000, // 30 seconds
+    serverSelectionTimeoutMS: 10000, // 10 seconds
     socketTimeoutMS: 45000, // 45 seconds
     bufferMaxEntries: 0, // Disable mongoose buffering
+    bufferCommands: false, // Disable mongoose buffering
     maxPoolSize: 10, // Maintain up to 10 socket connections
-    serverSelectionTimeoutMS: 30000, // Keep trying to send operations for 30 seconds
     heartbeatFrequencyMS: 10000, // Every 10 seconds
+    retryWrites: true,
+    w: 'majority'
 };
 
 mongoose.connect(mongoUri, mongoOptions)
@@ -217,7 +219,18 @@ app.post("/removeproduct", async (req, res) => {
 app.get("/allproduct", async (req, res) => {
     try {
         console.log("Attempting to fetch all products...");
-        let products = await Product.find({});
+        
+        // Check MongoDB connection
+        if (mongoose.connection.readyState !== 1) {
+            console.log("MongoDB not connected, readyState:", mongoose.connection.readyState);
+            return res.status(500).json({
+                success: false,
+                message: "Database not connected",
+                connectionState: mongoose.connection.readyState
+            });
+        }
+        
+        let products = await Product.find({}).maxTimeMS(10000); // 10 second timeout
         console.log("All products fetched, count:", products.length);
         
         // If no products found, return empty array instead of error
@@ -232,7 +245,8 @@ app.get("/allproduct", async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to fetch products",
-            error: error.message
+            error: error.message,
+            connectionState: mongoose.connection.readyState
         });
     }
 });
