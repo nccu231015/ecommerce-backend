@@ -10,21 +10,27 @@ const cors = require('cors');
 app.use(express.json());
 app.use(cors());
 
-// MongoDB connection with options
+// MongoDB connection with aggressive settings
 const mongoUri = process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarche0212@cluster0.wj9jly9.mongodb.net/e-commerce";
 console.log("Attempting to connect to MongoDB...");
 
+// Disable all buffering globally
+mongoose.set('bufferCommands', false);
+mongoose.set('bufferMaxEntries', 0);
+
 const mongoOptions = {
-    serverSelectionTimeoutMS: 10000, // 10 seconds
-    socketTimeoutMS: 45000, // 45 seconds
-    bufferMaxEntries: 0, // Disable mongoose buffering
-    bufferCommands: false, // Disable mongoose buffering
-    maxPoolSize: 10, // Maintain up to 10 socket connections
-    heartbeatFrequencyMS: 10000, // Every 10 seconds
-    retryWrites: true,
-    w: 'majority'
+    serverSelectionTimeoutMS: 5000, // 5 seconds
+    socketTimeoutMS: 10000, // 10 seconds
+    connectTimeoutMS: 5000, // 5 seconds
+    bufferMaxEntries: 0,
+    bufferCommands: false,
+    maxPoolSize: 5,
+    minPoolSize: 1,
+    maxIdleTimeMS: 30000,
+    retryWrites: false, // Disable retry writes for faster failure
 };
 
+// Connect immediately
 mongoose.connect(mongoUri, mongoOptions)
 .then(() => {
     console.log("✅ MongoDB connected successfully");
@@ -219,33 +225,43 @@ app.post("/removeproduct", async (req, res) => {
 app.get("/allproduct", async (req, res) => {
     try {
         console.log("Attempting to fetch all products...");
+        console.log("MongoDB readyState:", mongoose.connection.readyState);
         
-        // Check MongoDB connection
+        // Force immediate connection check
         if (mongoose.connection.readyState !== 1) {
-            console.log("MongoDB not connected, readyState:", mongoose.connection.readyState);
-            return res.status(500).json({
-                success: false,
-                message: "Database not connected",
-                connectionState: mongoose.connection.readyState
-            });
+            console.log("MongoDB not connected, attempting to connect...");
+            try {
+                await mongoose.connect(mongoUri, mongoOptions);
+                console.log("MongoDB connected successfully");
+            } catch (connectError) {
+                console.error("Failed to connect to MongoDB:", connectError.message);
+                return res.status(500).json({
+                    success: false,
+                    message: "Database connection failed",
+                    error: connectError.message,
+                    connectionState: mongoose.connection.readyState
+                });
+            }
         }
         
-        let products = await Product.find({}).maxTimeMS(10000); // 10 second timeout
-        console.log("All products fetched, count:", products.length);
+        // Use direct query with timeout
+        console.log("Executing query...");
+        const products = await Product.find({})
+            .maxTimeMS(5000) // 5 second timeout
+            .lean() // Return plain objects, not Mongoose documents
+            .exec();
+            
+        console.log("Query completed, products count:", products.length);
         
-        // If no products found, return empty array instead of error
-        if (products.length === 0) {
-            console.log("No products found in database");
-            return res.json([]);
-        }
+        return res.json(products);
         
-        res.json(products);
     } catch (error) {
-        console.error("Get all products error:", error);
+        console.error("Get all products error:", error.name, ":", error.message);
         res.status(500).json({
             success: false,
             message: "Failed to fetch products",
             error: error.message,
+            errorType: error.name,
             connectionState: mongoose.connection.readyState
         });
     }
