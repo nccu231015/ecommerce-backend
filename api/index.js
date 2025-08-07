@@ -1,7 +1,7 @@
 const port = process.env.PORT || 4000;
 const express = require('express');
 const app = express();
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
@@ -127,61 +127,22 @@ app.post("/upload", upload.single("product"), (req, res) => {
     }
 });
 
-// Schema for creating products
-const Product = mongoose.model("Product", {
-    id: {
-        type: Number,
-        required: true
-    },
-    name: {
-        type: String,
-        required: true
-    },
-    image: {
-        type: String,
-        required: true
-    },
-    category: {
-        type: String,
-        required: true
-    },
-    new_price: {
-        type: Number,
-        required: true
-    },
-    old_price: {
-        type: Number,
-        required: true
-    },
-    description: {
-        type: String,
-        default: ""
-    },
-    date: {
-        type: Date,
-        default: Date.now
-    },
-    available: {
-        type: Boolean,
-        default: true
-    },
-    categories: {
-        type: [String],
-        default: []
-    },
-    tags: {
-        type: [String],
-        default: []
-    }
-});
+// Helper function to get next product ID
+const getNextProductId = async (database) => {
+    const productsCollection = database.collection('products');
+    const lastProduct = await productsCollection.findOne({}, { sort: { id: -1 } });
+    return lastProduct ? lastProduct.id + 1 : 1;
+};
 
 // API for adding products
 app.post("/addproduct", async (req, res) => {
     try {
-        let products = await Product.find({});
-        let id = products.length > 0 ? products.slice(-1)[0].id + 1 : 1;
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        const id = await getNextProductId(database);
 
-        const product = new Product({
+        const product = {
             id: id,
             name: req.body.name,
             image: req.body.image,
@@ -191,9 +152,11 @@ app.post("/addproduct", async (req, res) => {
             description: req.body.description || "",
             categories: req.body.categories || [],
             tags: req.body.tags || [],
-        });
+            date: new Date(),
+            available: true
+        };
 
-        await product.save();
+        await productsCollection.insertOne(product);
         console.log("Product saved:", product.name);
         
         res.json({
@@ -212,7 +175,10 @@ app.post("/addproduct", async (req, res) => {
 // API for removing products
 app.post("/removeproduct", async (req, res) => {
     try {
-        await Product.findOneAndDelete({ id: req.body.id });
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        await productsCollection.deleteOne({ id: req.body.id });
         console.log("Product removed with ID:", req.body.id);
         
         res.json({
@@ -253,31 +219,18 @@ app.get("/allproduct", async (req, res) => {
     }
 });
 
-// Schema for users
-const Users = mongoose.model('Users', {
-    name: {
-        type: String,
-    },
-    email: {
-        type: String,
-        unique: true,
-    },
-    password: {
-        type: String,
-    },
-    cartData: {
-        type: Object,
-    },
-    date: {
-        type: Date,
-        default: Date.now,
-    }
-});
+// Helper function for user operations
+const getUsersCollection = async () => {
+    const database = await connectToDatabase();
+    return database.collection('users');
+};
 
 // API for user signup
 app.post('/signup', async (req, res) => {
     try {
-        let check = await Users.findOne({ email: req.body.email });
+        const usersCollection = await getUsersCollection();
+        
+        const check = await usersCollection.findOne({ email: req.body.email });
         if (check) {
             return res.status(400).json({
                 success: false,
@@ -290,18 +243,19 @@ app.post('/signup', async (req, res) => {
             cart[i] = 0;
         }
         
-        const user = new Users({
+        const user = {
             name: req.body.username,
             email: req.body.email,
             password: req.body.password,
             cartData: cart,
-        });
+            date: new Date()
+        };
         
-        await user.save();
+        const result = await usersCollection.insertOne(user);
         
         const data = {
             user: {
-                id: user.id
+                id: result.insertedId
             }
         };
         
@@ -319,13 +273,15 @@ app.post('/signup', async (req, res) => {
 // API for user login
 app.post('/login', async (req, res) => {
     try {
-        let user = await Users.findOne({ email: req.body.email });
+        const usersCollection = await getUsersCollection();
+        
+        const user = await usersCollection.findOne({ email: req.body.email });
         if (user) {
             const passCompare = req.body.password === user.password;
             if (passCompare) {
                 const data = {
                     user: {
-                        id: user.id
+                        id: user._id
                     }
                 };
                 const token = jwt.sign(data, 'secret_ecom');
@@ -348,8 +304,11 @@ app.post('/login', async (req, res) => {
 // API for getting new collections
 app.get('/newcollection', async (req, res) => {
     try {
-        let products = await Product.find({});
-        let newcollection = products.slice(1).slice(-8);
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        const products = await productsCollection.find({}).toArray();
+        const newcollection = products.slice(1).slice(-8);
         console.log("NewCollection Fetched");
         res.send(newcollection);
     } catch (error) {
@@ -364,8 +323,11 @@ app.get('/newcollection', async (req, res) => {
 // API for getting popular products in women category
 app.get('/popularinwomen', async (req, res) => {
     try {
-        let products = await Product.find({ category: "women" });
-        let popular_in_women = products.slice(0, 4);
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        const products = await productsCollection.find({ category: "women" }).toArray();
+        const popular_in_women = products.slice(0, 4);
         console.log("Popular in women fetched");
         res.send(popular_in_women);
     } catch (error) {
@@ -397,9 +359,14 @@ const fetchUser = async (req, res, next) => {
 app.post('/addtocart', fetchUser, async (req, res) => {
     try {
         console.log("Added", req.body.itemId);
-        let userData = await Users.findOne({ _id: req.user.id });
+        const usersCollection = await getUsersCollection();
+        
+        const userData = await usersCollection.findOne({ _id: new ObjectId(req.user.id) });
         userData.cartData[req.body.itemId] += 1;
-        await Users.findOneAndUpdate({ _id: req.user.id }, { cartData: userData.cartData });
+        await usersCollection.updateOne(
+            { _id: new ObjectId(req.user.id) }, 
+            { $set: { cartData: userData.cartData } }
+        );
         res.send("Added");
     } catch (error) {
         console.error("Add to cart error:", error);
@@ -414,10 +381,15 @@ app.post('/addtocart', fetchUser, async (req, res) => {
 app.post('/removefromcart', fetchUser, async (req, res) => {
     try {
         console.log("removed", req.body.itemId);
-        let userData = await Users.findOne({ _id: req.user.id });
+        const usersCollection = await getUsersCollection();
+        
+        const userData = await usersCollection.findOne({ _id: new ObjectId(req.user.id) });
         if (userData.cartData[req.body.itemId] > 0)
             userData.cartData[req.body.itemId] -= 1;
-        await Users.findOneAndUpdate({ _id: req.user.id }, { cartData: userData.cartData });
+        await usersCollection.updateOne(
+            { _id: new ObjectId(req.user.id) }, 
+            { $set: { cartData: userData.cartData } }
+        );
         res.send("Removed");
     } catch (error) {
         console.error("Remove from cart error:", error);
@@ -432,7 +404,9 @@ app.post('/removefromcart', fetchUser, async (req, res) => {
 app.post('/getcart', fetchUser, async (req, res) => {
     try {
         console.log("GetCart");
-        let userData = await Users.findOne({ _id: req.user.id });
+        const usersCollection = await getUsersCollection();
+        
+        const userData = await usersCollection.findOne({ _id: new ObjectId(req.user.id) });
         res.json(userData.cartData);
     } catch (error) {
         console.error("Get cart error:", error);
