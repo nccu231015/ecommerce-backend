@@ -11,9 +11,17 @@ app.use(express.json());
 app.use(cors());
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarche0212@cluster0.wj9jly9.mongodb.net/e-commerce")
-.then(() => console.log("MongoDB connected"))
-.catch((error) => console.error("MongoDB connection error:", error));
+const mongoUri = process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarche0212@cluster0.wj9jly9.mongodb.net/e-commerce";
+console.log("Attempting to connect to MongoDB...");
+mongoose.connect(mongoUri)
+.then(() => {
+    console.log("✅ MongoDB connected successfully");
+    console.log("Database:", mongoose.connection.db.databaseName);
+})
+.catch((error) => {
+    console.error("❌ MongoDB connection error:", error.message);
+    console.error("Connection string (masked):", mongoUri.replace(/\/\/.*:.*@/, "//***:***@"));
+});
 
 // Root API endpoint
 app.get("/", (req, res) => {
