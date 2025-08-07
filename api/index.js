@@ -10,10 +10,20 @@ const cors = require('cors');
 app.use(express.json());
 app.use(cors());
 
-// MongoDB connection
+// MongoDB connection with options
 const mongoUri = process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarche0212@cluster0.wj9jly9.mongodb.net/e-commerce";
 console.log("Attempting to connect to MongoDB...");
-mongoose.connect(mongoUri)
+
+const mongoOptions = {
+    serverSelectionTimeoutMS: 30000, // 30 seconds
+    socketTimeoutMS: 45000, // 45 seconds
+    bufferMaxEntries: 0, // Disable mongoose buffering
+    maxPoolSize: 10, // Maintain up to 10 socket connections
+    serverSelectionTimeoutMS: 30000, // Keep trying to send operations for 30 seconds
+    heartbeatFrequencyMS: 10000, // Every 10 seconds
+};
+
+mongoose.connect(mongoUri, mongoOptions)
 .then(() => {
     console.log("✅ MongoDB connected successfully");
     console.log("Database:", mongoose.connection.db.databaseName);
