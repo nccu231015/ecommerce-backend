@@ -1,7 +1,7 @@
 const port = process.env.PORT || 4000;
 const express = require('express');
 const app = express();
-const mongoose = require('mongoose');
+const { MongoClient } = require('mongodb');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
@@ -10,67 +10,74 @@ const cors = require('cors');
 app.use(express.json());
 app.use(cors());
 
-// MongoDB connection with aggressive settings
+// MongoDB connection using native driver
 const mongoUri = process.env.MONGODB_URI || "mongodb+srv://ecommercedev:estmarche0212@cluster0.wj9jly9.mongodb.net/e-commerce";
-console.log("Attempting to connect to MongoDB...");
+console.log("Setting up MongoDB client...");
 
-// Disable all buffering globally
-mongoose.set('bufferCommands', false);
-mongoose.set('bufferMaxEntries', 0);
+let db;
+let client;
 
-const mongoOptions = {
-    serverSelectionTimeoutMS: 5000, // 5 seconds
-    socketTimeoutMS: 10000, // 10 seconds
-    connectTimeoutMS: 5000, // 5 seconds
-    bufferMaxEntries: 0,
-    bufferCommands: false,
-    maxPoolSize: 5,
-    minPoolSize: 1,
-    maxIdleTimeMS: 30000,
-    retryWrites: false, // Disable retry writes for faster failure
+const connectToDatabase = async () => {
+    try {
+        if (!client) {
+            console.log("Creating new MongoDB client...");
+            client = new MongoClient(mongoUri, {
+                serverSelectionTimeoutMS: 5000,
+                socketTimeoutMS: 5000,
+                connectTimeoutMS: 5000,
+                maxPoolSize: 5,
+                minPoolSize: 1,
+                maxIdleTimeMS: 30000,
+            });
+        }
+        
+        if (!db) {
+            console.log("Connecting to database...");
+            await client.connect();
+            db = client.db('e-commerce');
+            console.log("✅ Connected to MongoDB successfully");
+        }
+        
+        return db;
+    } catch (error) {
+        console.error("❌ MongoDB connection error:", error.message);
+        throw error;
+    }
 };
 
-// Connect immediately
-mongoose.connect(mongoUri, mongoOptions)
-.then(() => {
-    console.log("✅ MongoDB connected successfully");
-    console.log("Database:", mongoose.connection.db.databaseName);
-})
-.catch((error) => {
-    console.error("❌ MongoDB connection error:", error.message);
-    console.error("Connection string (masked):", mongoUri.replace(/\/\/.*:.*@/, "//***:***@"));
-});
-
 // Root API endpoint
-app.get("/", (req, res) => {
-    res.json({
-        success: true,
-        message: "Express app is running",
-        timestamp: new Date().toISOString(),
-        mongodb: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
-    });
+app.get("/", async (req, res) => {
+    try {
+        const database = await connectToDatabase();
+        res.json({
+            success: true,
+            message: "Express app is running",
+            timestamp: new Date().toISOString(),
+            mongodb: "connected"
+        });
+    } catch (error) {
+        res.json({
+            success: true,
+            message: "Express app is running",
+            timestamp: new Date().toISOString(),
+            mongodb: "disconnected",
+            error: error.message
+        });
+    }
 });
 
 // Health check endpoint
 app.get("/health", async (req, res) => {
     try {
-        // Test MongoDB connection
-        const dbState = mongoose.connection.readyState;
-        const dbStatus = {
-            0: "disconnected",
-            1: "connected", 
-            2: "connecting",
-            3: "disconnecting"
-        };
-        
-        // Try to count products
-        const productCount = await Product.countDocuments();
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        const productCount = await productsCollection.countDocuments();
         
         res.json({
             success: true,
             message: "Health check passed",
             database: {
-                status: dbStatus[dbState],
+                status: "connected",
                 productCount: productCount
             },
             timestamp: new Date().toISOString()
@@ -225,44 +232,23 @@ app.post("/removeproduct", async (req, res) => {
 app.get("/allproduct", async (req, res) => {
     try {
         console.log("Attempting to fetch all products...");
-        console.log("MongoDB readyState:", mongoose.connection.readyState);
         
-        // Force immediate connection check
-        if (mongoose.connection.readyState !== 1) {
-            console.log("MongoDB not connected, attempting to connect...");
-            try {
-                await mongoose.connect(mongoUri, mongoOptions);
-                console.log("MongoDB connected successfully");
-            } catch (connectError) {
-                console.error("Failed to connect to MongoDB:", connectError.message);
-                return res.status(500).json({
-                    success: false,
-                    message: "Database connection failed",
-                    error: connectError.message,
-                    connectionState: mongoose.connection.readyState
-                });
-            }
-        }
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
         
-        // Use direct query with timeout
         console.log("Executing query...");
-        const products = await Product.find({})
-            .maxTimeMS(5000) // 5 second timeout
-            .lean() // Return plain objects, not Mongoose documents
-            .exec();
-            
+        const products = await productsCollection.find({}).toArray();
+        
         console.log("Query completed, products count:", products.length);
         
         return res.json(products);
         
     } catch (error) {
-        console.error("Get all products error:", error.name, ":", error.message);
+        console.error("Get all products error:", error.message);
         res.status(500).json({
             success: false,
             message: "Failed to fetch products",
-            error: error.message,
-            errorType: error.name,
-            connectionState: mongoose.connection.readyState
+            error: error.message
         });
     }
 });
