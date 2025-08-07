@@ -20,8 +20,43 @@ app.get("/", (req, res) => {
     res.json({
         success: true,
         message: "Express app is running",
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        mongodb: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
     });
+});
+
+// Health check endpoint
+app.get("/health", async (req, res) => {
+    try {
+        // Test MongoDB connection
+        const dbState = mongoose.connection.readyState;
+        const dbStatus = {
+            0: "disconnected",
+            1: "connected", 
+            2: "connecting",
+            3: "disconnecting"
+        };
+        
+        // Try to count products
+        const productCount = await Product.countDocuments();
+        
+        res.json({
+            success: true,
+            message: "Health check passed",
+            database: {
+                status: dbStatus[dbState],
+                productCount: productCount
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Health check failed",
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // Image storage engine - simplified for Vercel
@@ -164,14 +199,23 @@ app.post("/removeproduct", async (req, res) => {
 // API for getting all products
 app.get("/allproduct", async (req, res) => {
     try {
+        console.log("Attempting to fetch all products...");
         let products = await Product.find({});
         console.log("All products fetched, count:", products.length);
-        res.send(products);
+        
+        // If no products found, return empty array instead of error
+        if (products.length === 0) {
+            console.log("No products found in database");
+            return res.json([]);
+        }
+        
+        res.json(products);
     } catch (error) {
         console.error("Get all products error:", error);
         res.status(500).json({
             success: false,
-            message: "Failed to fetch products"
+            message: "Failed to fetch products",
+            error: error.message
         });
     }
 });
