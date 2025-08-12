@@ -242,13 +242,70 @@ class SearchService {
     }
   }
   
+  // LLM 查詢優化 - 將自然語言轉換為適合向量搜索的關鍵詞
+  async optimizeSearchQuery(originalQuery) {
+    try {
+      console.log(`🤖 LLM 查詢優化: "${originalQuery}"`);
+      
+      const optimizationPrompt = `你是一個電商搜索查詢優化助手。請將用戶的自然語言查詢轉換為適合商品搜索的關鍵詞。
+
+規則：
+1. 提取核心商品特徵（顏色、類型、風格、場合等）
+2. 移除無關的語氣詞和問句結構
+3. 保留重要的修飾詞
+4. 輸出簡潔的關鍵詞組合
+
+範例：
+- 輸入："我想找一件適合約會穿的黑色外套" → 輸出："黑色外套 約會"
+- 輸入："有沒有便宜一點的運動服？" → 輸出："運動服 便宜"
+- 輸入："給我推薦冬天保暖的衣服" → 輸出："冬季保暖衣服"
+
+用戶查詢："${originalQuery}"
+優化後的搜索詞：`;
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            { role: 'user', content: optimizationPrompt }
+          ],
+          max_tokens: 100,
+          temperature: 0.3
+        })
+      });
+
+      if (!response.ok) {
+        console.log(`⚠️ LLM 優化失敗，使用原始查詢`);
+        return originalQuery;
+      }
+
+      const data = await response.json();
+      const optimizedQuery = data.choices[0]?.message?.content?.trim() || originalQuery;
+      
+      console.log(`✅ LLM 優化結果: "${originalQuery}" → "${optimizedQuery}"`);
+      return optimizedQuery;
+      
+    } catch (error) {
+      console.error('❌ LLM 查詢優化失敗:', error.message);
+      return originalQuery; // 失敗時回退到原始查詢
+    }
+  }
+
   // 純語意向量搜索 - 按照 MongoDB Atlas 官方標準實現
   async vectorOnlySearch(database, query, limit, filters = {}) {
     console.log(`🧠 開始純語意向量搜索: "${query}"`);
     
     try {
-      // 生成查詢向量
-      const queryVector = await this.generateQueryVector(query);
+      // 🤖 第一步：LLM 優化查詢
+      const optimizedQuery = await this.optimizeSearchQuery(query);
+      
+      // 生成查詢向量（使用優化後的查詢）
+      const queryVector = await this.generateQueryVector(optimizedQuery);
       if (!queryVector) {
         console.log(`❌ 向量生成失敗`);
         return {
