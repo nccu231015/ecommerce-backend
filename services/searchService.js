@@ -71,16 +71,26 @@ class SearchService {
         available: { $eq: true }
       };
       
-      // 處理價格篩選
+      // 處理價格篩選（資料庫中價格是字符串，需要轉換比較）
       if (filters.minPrice || filters.maxPrice) {
-        const priceFilter = {};
+        const priceConditions = [];
+        
         if (filters.minPrice) {
-          priceFilter.$gte = parseInt(filters.minPrice);
+          priceConditions.push({
+            $expr: { $gte: [{ $toInt: "$new_price" }, parseInt(filters.minPrice)] }
+          });
         }
+        
         if (filters.maxPrice) {
-          priceFilter.$lte = parseInt(filters.maxPrice);
+          priceConditions.push({
+            $expr: { $lte: [{ $toInt: "$new_price" }, parseInt(filters.maxPrice)] }
+          });
         }
-        filterConditions.new_price = priceFilter;
+        
+        if (priceConditions.length > 0) {
+          filterConditions.$and = filterConditions.$and || [];
+          filterConditions.$and.push(...priceConditions);
+        }
       }
       
       // 處理類別篩選
@@ -286,7 +296,7 @@ class SearchService {
    - categories: 商品標籤數組
 
 商品類別對應：
-- 童裝/兒童/小孩 → "kids"
+- 童裝/兒童/小孩 → "kid"
 - 男裝/男性 → "men"  
 - 女裝/女性 → "women"
 
@@ -298,10 +308,10 @@ class SearchService {
 輸出：{"keywords": "運動服", "filters": {"maxPrice": 800}}
 
 輸入："我想要找童裝，價格1000以下的"
-輸出：{"keywords": "童裝 兒童", "filters": {"maxPrice": 1000, "category": "kids"}}
+輸出：{"keywords": "童裝 兒童", "filters": {"maxPrice": 1000, "category": "kid"}}
 
 輸入："我想要看童裝，價格1000~2000"
-輸出：{"keywords": "童裝 兒童", "filters": {"minPrice": 1000, "maxPrice": 2000, "category": "kids"}}
+輸出：{"keywords": "童裝 兒童", "filters": {"minPrice": 1000, "maxPrice": 2000, "category": "kid"}}
 
 輸入："給我推薦女生冬天保暖的衣服，預算500-800"
 輸出：{"keywords": "冬季保暖衣服", "filters": {"minPrice": 500, "maxPrice": 800, "category": "women"}}
