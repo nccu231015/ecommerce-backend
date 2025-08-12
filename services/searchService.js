@@ -352,12 +352,17 @@ class SearchService {
       const data = await response.json();
       const responseText = data.choices[0]?.message?.content?.trim() || '';
       
-      // 添加詳細調試信息
-      console.log(`📝 GPT-4o 完整回應:`, JSON.stringify(data, null, 2));
-      console.log(`📝 GPT-4o 內容: "${responseText}"`);
+      // 清理 markdown 代碼塊格式
+      const cleanedText = responseText
+        .replace(/```json\s*/g, '')  // 移除 ```json
+        .replace(/```\s*/g, '')      // 移除 ```
+        .trim();
+      
+      console.log(`📝 GPT-4o 原始內容: "${responseText}"`);
+      console.log(`🧹 清理後內容: "${cleanedText}"`);
       
       try {
-        const parsed = JSON.parse(responseText);
+        const parsed = JSON.parse(cleanedText);
         console.log(`✅ LLM 優化結果: "${originalQuery}" → 關鍵詞: "${parsed.keywords}", 篩選: ${JSON.stringify(parsed.filters)}`);
         return {
           keywords: parsed.keywords || originalQuery,
@@ -366,6 +371,7 @@ class SearchService {
       } catch (parseError) {
         console.log(`⚠️ JSON 解析失敗，使用原始查詢`);
         console.log(`📝 GPT-4o 原始回應: "${responseText}"`);
+        console.log(`🧹 清理後內容: "${cleanedText}"`);
         console.log(`❌ 解析錯誤: ${parseError.message}`);
         return { keywords: originalQuery, filters: {} };
       }
@@ -425,13 +431,14 @@ class SearchService {
     console.log(`🧠 開始純語意向量搜索: "${query}"`);
     
     try {
-      // 🔧 臨時修復：手動解析價格和類別（繞過 LLM 優化問題）
-      const manualFilters = this.parseQueryManually(query);
-      const optimizedQuery = query; // 暫時使用原始查詢
+      // 🤖 第一步：LLM 優化查詢
+      const optimization = await this.optimizeSearchQuery(query);
+      const optimizedQuery = optimization.keywords;
+      const llmFilters = optimization.filters;
       
-      // 合併手動解析的篩選條件和用戶篩選條件
-      const combinedFilters = { ...filters, ...manualFilters };
-      console.log(`🔍 手動解析篩選條件:`, combinedFilters);
+      // 合併 LLM 篩選條件和用戶篩選條件
+      const combinedFilters = { ...filters, ...llmFilters };
+      console.log(`🔍 合併篩選條件:`, combinedFilters);
       
       // 生成查詢向量（使用優化後的查詢）
       const queryVector = await this.generateQueryVector(optimizedQuery);
