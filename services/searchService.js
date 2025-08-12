@@ -131,7 +131,7 @@ class SearchService {
         },
         {
           $match: {
-            similarity_score: { $gte: 0.9 }         // 保持高相似度閾值，結合類別篩選確保精準性
+            similarity_score: { $gte: 0.85 }        // 調整相似度閾值，平衡精準度和召回率
           }
         }
       ];
