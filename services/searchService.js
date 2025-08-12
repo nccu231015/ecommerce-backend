@@ -456,76 +456,7 @@ class SearchService {
     }
   }
 
-  // 在預篩選商品中執行向量搜索
-  async vectorSearchInPreFiltered(database, queryVector, limit, preFilteredProducts) {
-    try {
-      // 提取所有預篩選商品的 ID
-      const productIds = preFilteredProducts.map(p => p._id);
-      
-      const productsCollection = database.collection('products');
-      const pipeline = [
-        {
-          $vectorSearch: {
-            index: "vector_index",
-            path: "product_embedding",
-            queryVector: queryVector,
-            numCandidates: Math.max(productIds.length * 2, 100), // 增加候選數量
-            limit: Math.max(productIds.length, 20),              // 增加初始限制
-            filter: {
-              available: { $eq: true },
-              _id: { $in: productIds }  // 在 filter 中限制預篩選商品
-            }
-          }
-        },
-        {
-          $addFields: {
-            search_type: "semantic",
-            similarity_score: { $meta: "vectorSearchScore" }
-          }
-        },
-        {
-          $project: {
-            id: 1,
-            name: 1,
-            image: 1,
-            category: 1,
-            new_price: 1,
-            old_price: 1,
-            description: 1,
-            categories: 1,
-            tags: 1,
-            search_type: 1,
-            similarity_score: 1
-          }
-        },
-        {
-          $match: {
-            similarity_score: { $gte: 0.9 }
-          }
-        },
-        {
-          $sort: {
-            similarity_score: -1
-          }
-        },
-        {
-          $limit: limit
-        }
-      ];
-      
-      console.log(`🔍 預篩選向量搜索: 在 ${productIds.length} 個商品中搜索`);
-      
-      const results = await productsCollection.aggregate(pipeline).toArray();
-      
-      console.log(`✅ 預篩選向量搜索完成: ${results.length} 個結果`);
-      
-      return results;
-      
-    } catch (error) {
-      console.error('❌ 預篩選向量搜索失敗:', error.message);
-      return [];
-    }
-  }
+
 
   // 手動解析查詢（臨時修復，繞過 LLM 優化問題）
   parseQueryManually(query) {
@@ -605,8 +536,8 @@ class SearchService {
       
       console.log(`✅ 預篩選完成: ${preFilteredProducts.length} 個候選商品`);
       
-      // 🧠 第三步：在預篩選的商品中進行語意向量搜索
-      console.log(`🔍 步驟3: 在候選商品中執行語意搜索`);
+      // 🧠 第三步：直接使用完整的向量搜索（官方推薦方法）
+      console.log(`🔍 步驟3: 執行完整向量搜索，然後與預篩選結果取交集`);
       const queryVector = await this.generateQueryVector(optimizedQuery);
       if (!queryVector) {
         console.log(`❌ 向量生成失敗`);
@@ -623,8 +554,15 @@ class SearchService {
       
       console.log(`🔍 執行語意向量搜索，向量維度: ${queryVector.length}`);
       
-      // 在預篩選的商品中執行向量搜索
-      const vectorResults = await this.vectorSearchInPreFiltered(database, queryVector, limit, preFilteredProducts);
+      // 執行完整的向量搜索，然後與預篩選結果取交集
+      const allVectorResults = await this.vectorSearch(database, queryVector, Math.max(limit * 5, 50), {});
+      
+      // 取預篩選商品和向量搜索結果的交集
+      const preFilteredIds = new Set(preFilteredProducts.map(p => p._id ? p._id.toString() : p.id));
+      const vectorResults = allVectorResults.filter(item => {
+        const itemId = item._id ? item._id.toString() : item.id;
+        return preFilteredIds.has(itemId);
+      });
       
       console.log(`✅ 智能搜索完成，找到 ${vectorResults.length} 個結果`);
       
