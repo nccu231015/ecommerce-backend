@@ -7,6 +7,8 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const cloudinary = require('cloudinary').v2;
+require('dotenv').config();
+const searchService = require('../services/searchService');
 
 app.use(express.json());
 app.use(cors());
@@ -182,12 +184,27 @@ app.post("/addproduct", async (req, res) => {
             available: true
         };
 
+        // 🤖 自動生成向量嵌入
+        console.log("🤖 正在生成商品向量嵌入...");
+        const productEmbedding = await generateProductEmbedding(product);
+        
+        if (productEmbedding) {
+            product.product_embedding = productEmbedding;
+            product.vector_generated_at = new Date();
+            product.embedding_model = "text-embedding-ada-002";
+            console.log("✅ 商品向量嵌入生成成功");
+        } else {
+            console.log("⚠️ 商品向量嵌入生成失敗，但商品仍會被保存");
+        }
+
         await productsCollection.insertOne(product);
         console.log("Product saved:", product.name);
         
         res.json({
             success: true,
             name: req.body.name,
+            hasVector: !!productEmbedding,
+            message: productEmbedding ? "商品添加成功，AI搜索已啟用" : "商品添加成功，但AI搜索功能暫時不可用"
         });
     } catch (error) {
         console.error("Add product error:", error);
@@ -439,6 +456,179 @@ app.post('/getcart', fetchUser, async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to get cart data"
+        });
+    }
+});
+
+// 生成商品向量嵌入的函數
+async function generateProductEmbedding(product) {
+    try {
+        const searchableText = [
+            product.name || '',
+            product.description || '',
+            product.category || '',
+            (product.categories || []).join(' '),
+            (product.tags || []).join(' ')
+        ].filter(text => text.trim().length > 0).join(' ');
+        
+        const OpenAI = require('openai');
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY
+        });
+        
+        const response = await openai.embeddings.create({
+            model: "text-embedding-ada-002",
+            input: searchableText,
+            encoding_format: "float"
+        });
+        
+        return response.data[0].embedding;
+    } catch (error) {
+        console.error(`❌ 商品向量生成失敗:`, error.message);
+        return null;
+    }
+}
+
+// API for AI search
+app.post("/ai-search", async (req, res) => {
+    try {
+        const { query, limit = 10, filters = {}, searchType = 'hybrid' } = req.body;
+        
+        if (!query || !query.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "搜索查詢不能為空"
+            });
+        }
+
+        console.log(`🔍 AI搜索請求: "${query}", 類型: ${searchType}`);
+        
+        const database = await connectToDatabase();
+        let searchResults;
+        
+        switch (searchType) {
+            case 'vector':
+                const queryVector = await searchService.generateQueryVector(query);
+                if (queryVector) {
+                    searchResults = {
+                        results: await searchService.vectorSearch(database, queryVector, limit, filters),
+                        breakdown: { vector_results: 1, keyword_results: 0, total_unique: 1 }
+                    };
+                } else {
+                    searchResults = { results: [], breakdown: { vector_results: 0, keyword_results: 0, total_unique: 0 } };
+                }
+                break;
+                
+            case 'keyword':
+                const keywordResults = await searchService.keywordSearch(database, query, limit, filters);
+                searchResults = {
+                    results: keywordResults,
+                    breakdown: { vector_results: 0, keyword_results: keywordResults.length, total_unique: keywordResults.length }
+                };
+                break;
+                
+            default: // hybrid
+                searchResults = await searchService.hybridSearch(database, query, { limit, filters });
+        }
+        
+        console.log(`✅ AI搜索完成: 找到 ${searchResults.results.length} 個結果`);
+        
+        res.json({
+            success: true,
+            query: query,
+            searchType: searchType,
+            totalResults: searchResults.results.length,
+            breakdown: searchResults.breakdown,
+            results: searchResults.results
+        });
+        
+    } catch (error) {
+        console.error("❌ AI搜索失敗:", error.message);
+        res.status(500).json({
+            success: false,
+            message: "搜索服務暫時不可用",
+            error: error.message
+        });
+    }
+});
+
+// API for search suggestions
+app.post("/search-suggestions", async (req, res) => {
+    try {
+        const { query, limit = 5 } = req.body;
+        
+        if (!query || query.trim().length < 2) {
+            return res.json({
+                success: true,
+                suggestions: []
+            });
+        }
+        
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        // 基於現有商品名稱和標籤生成建議
+        const suggestions = await productsCollection.aggregate([
+            {
+                $match: {
+                    $or: [
+                        { name: { $regex: query, $options: 'i' } },
+                        { categories: { $elemMatch: { $regex: query, $options: 'i' } } },
+                        { tags: { $elemMatch: { $regex: query, $options: 'i' } } }
+                    ]
+                }
+            },
+            {
+                $project: {
+                    suggestion: "$name"
+                }
+            },
+            {
+                $limit: limit
+            }
+        ]).toArray();
+        
+        const suggestionTexts = suggestions.map(s => s.suggestion);
+        
+        res.json({
+            success: true,
+            suggestions: suggestionTexts
+        });
+        
+    } catch (error) {
+        console.error("❌ 搜索建議失敗:", error.message);
+        res.json({
+            success: true,
+            suggestions: []
+        });
+    }
+});
+
+// API for trending searches
+app.get("/trending-searches", async (req, res) => {
+    try {
+        // 模擬熱門搜索詞
+        const trendingTerms = [
+            "黑色上衣",
+            "運動服",
+            "約會穿搭",
+            "休閒外套",
+            "夏季洋裝",
+            "牛仔褲",
+            "正式服裝",
+            "舒適鞋子"
+        ];
+        
+        res.json({
+            success: true,
+            trending: trendingTerms
+        });
+        
+    } catch (error) {
+        console.error("❌ 熱門搜索失敗:", error.message);
+        res.json({
+            success: true,
+            trending: []
         });
     }
 });
