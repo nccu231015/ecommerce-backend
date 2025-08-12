@@ -343,7 +343,9 @@ class SearchService {
       });
 
       if (!response.ok) {
-        console.log(`⚠️ LLM 優化失敗，使用原始查詢`);
+        console.log(`⚠️ LLM 優化失敗，狀態碼: ${response.status}, 使用原始查詢`);
+        const errorText = await response.text();
+        console.log(`❌ 錯誤詳情: ${errorText}`);
         return { keywords: originalQuery, filters: {} };
       }
 
@@ -358,7 +360,9 @@ class SearchService {
           filters: parsed.filters || {}
         };
       } catch (parseError) {
-        console.log(`⚠️ JSON 解析失敗，使用原始查詢: ${responseText}`);
+        console.log(`⚠️ JSON 解析失敗，使用原始查詢`);
+        console.log(`📝 GPT-4o 原始回應: "${responseText}"`);
+        console.log(`❌ 解析錯誤: ${parseError.message}`);
         return { keywords: originalQuery, filters: {} };
       }
       
