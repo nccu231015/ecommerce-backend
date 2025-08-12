@@ -543,30 +543,9 @@ app.post("/ai-search", async (req, res) => {
         const database = await connectToDatabase();
         let searchResults;
         
-        switch (searchType) {
-            case 'vector':
-                const queryVector = await searchService.generateQueryVector(query);
-                if (queryVector) {
-                    searchResults = {
-                        results: await searchService.vectorSearch(database, queryVector, limit, filters),
-                        breakdown: { vector_results: 1, keyword_results: 0, total_unique: 1 }
-                    };
-                } else {
-                    searchResults = { results: [], breakdown: { vector_results: 0, keyword_results: 0, total_unique: 0 } };
-                }
-                break;
-                
-            case 'keyword':
-                const keywordResults = await searchService.keywordSearch(database, query, limit, filters);
-                searchResults = {
-                    results: keywordResults,
-                    breakdown: { vector_results: 0, keyword_results: keywordResults.length, total_unique: keywordResults.length }
-                };
-                break;
-                
-            default: // hybrid
-                searchResults = await searchService.hybridSearch(database, query, { limit, filters });
-        }
+        // 只使用純語意向量搜索
+        console.log(`🎯 執行純語意向量搜索: "${query}"`);
+        searchResults = await searchService.vectorOnlySearch(database, query, limit, filters);
         
         console.log(`✅ AI搜索完成: 找到 ${searchResults.results.length} 個結果`);
         

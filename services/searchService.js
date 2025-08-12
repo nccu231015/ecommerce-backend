@@ -242,6 +242,73 @@ class SearchService {
     }
   }
   
+  // 純語意向量搜索 - 按照 MongoDB Atlas 官方標準實現
+  async vectorOnlySearch(database, query, limit, filters = {}) {
+    console.log(`🧠 開始純語意向量搜索: "${query}"`);
+    
+    try {
+      // 生成查詢向量
+      const queryVector = await this.generateQueryVector(query);
+      if (!queryVector) {
+        console.log(`❌ 向量生成失敗`);
+        return {
+          results: [],
+          breakdown: {
+            vector_results: 0,
+            total_results: 0,
+            search_method: "pure_vector_search"
+          }
+        };
+      }
+      
+      console.log(`🔍 執行語意向量搜索，向量維度: ${queryVector.length}`);
+      
+      // 執行向量搜索
+      const vectorResults = await this.vectorSearch(database, queryVector, limit, filters);
+      
+      console.log(`✅ 向量搜索完成，找到 ${vectorResults.length} 個結果`);
+      
+      // 按相似度排序並調整信心度
+      const finalResults = vectorResults
+        .map(item => ({
+          ...item,
+          search_type: 'semantic',
+          similarity_score: this.adjustConfidenceScore(item.similarity_score || 0.4, 'semantic')
+        }))
+        .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
+        .slice(0, limit);
+      
+      console.log(`🎯 最終返回 ${finalResults.length} 個高相關性商品`);
+      if (finalResults.length > 0) {
+        console.log(`📝 結果樣本:`, finalResults.slice(0, 3).map(r => ({ 
+          name: r.name, 
+          score: r.similarity_score 
+        })));
+      }
+      
+      return {
+        results: finalResults,
+        breakdown: {
+          vector_results: vectorResults.length,
+          total_results: finalResults.length,
+          search_method: "pure_vector_search"
+        }
+      };
+      
+    } catch (error) {
+      console.error(`❌ 向量搜索失敗:`, error);
+      return {
+        results: [],
+        breakdown: {
+          vector_results: 0,
+          total_results: 0,
+          search_method: "pure_vector_search",
+          error: error.message
+        }
+      };
+    }
+  }
+  
   // RAG 混合搜索 - 結合語義理解和關鍵字匹配
   async hybridSearch(database, query, options = {}) {
     const {
