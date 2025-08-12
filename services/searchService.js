@@ -215,8 +215,26 @@ class SearchService {
     
     const [vectorResults, keywordResults] = await Promise.all(searchPromises);
     
+    console.log(`📊 原始檢索結果 - 語義: ${vectorResults.length}, 關鍵字: ${keywordResults.length}`);
+    
+    // 🔧 修復：確保至少有關鍵字搜索結果時混合搜索不會失敗
+    if (vectorResults.length === 0 && keywordResults.length === 0) {
+      console.log(`⚠️ 兩種搜索都沒有結果`);
+      return {
+        results: [],
+        breakdown: {
+          vector_results: 0,
+          keyword_results: 0,
+          total_unique: 0,
+          weights: weights,
+          rag_method: "hybrid_retrieval_augmented_generation"
+        }
+      };
+    }
+    
     // RAG 第二步：增強 (Augmentation) - 合併和評分
     const enhancedResults = this.enhanceSearchResults(vectorResults, keywordResults, weights, query);
+    console.log(`🔧 增強後結果數量: ${enhancedResults.length}`);
     
     // RAG 第三步：生成 (Generation) - 排序和過濾最相關結果
     const finalResults = enhancedResults
@@ -250,15 +268,18 @@ class SearchService {
   
   // RAG 增強：結果合併和評分 - 調整信心度計算
   enhanceSearchResults(vectorResults, keywordResults, weights, originalQuery) {
+    console.log(`🔧 開始增強結果 - 語義: ${vectorResults.length}, 關鍵字: ${keywordResults.length}`);
     const allResults = [];
     
     // 處理語義搜索結果
     vectorResults.forEach(item => {
       // 調整語義搜索的信心度計算
       const adjustedScore = this.adjustConfidenceScore(item.similarity_score || 0.4, 'semantic');
+      const finalScore = adjustedScore * weights.vector;
+      console.log(`🧠 語義結果: ${item.name} (分數: ${finalScore.toFixed(3)})`);
       allResults.push({
         ...item,
-        final_score: adjustedScore * weights.vector,
+        final_score: finalScore,
         search_type: 'semantic',
         relevance_reason: '語義相似性匹配',
         raw_similarity: item.similarity_score
@@ -271,15 +292,19 @@ class SearchService {
       if (existingIndex >= 0) {
         // 如果已存在，增強分數（混合信號）
         const keywordScore = this.adjustConfidenceScore(item.similarity_score || 0.3, 'keyword');
-        allResults[existingIndex].final_score += keywordScore * weights.keyword;
+        const additionalScore = keywordScore * weights.keyword;
+        allResults[existingIndex].final_score += additionalScore;
         allResults[existingIndex].search_type = 'hybrid';
         allResults[existingIndex].relevance_reason = '語義+關鍵字雙重匹配';
+        console.log(`🔀 混合結果: ${item.name} (總分數: ${allResults[existingIndex].final_score.toFixed(3)})`);
       } else {
         // 新結果
         const adjustedScore = this.adjustConfidenceScore(item.similarity_score || 0.3, 'keyword');
+        const finalScore = adjustedScore * weights.keyword;
+        console.log(`🔍 關鍵字結果: ${item.name} (分數: ${finalScore.toFixed(3)})`);
         allResults.push({
           ...item,
-          final_score: adjustedScore * weights.keyword,
+          final_score: finalScore,
           search_type: 'keyword',
           relevance_reason: '關鍵字精確匹配',
           raw_similarity: item.similarity_score
@@ -287,6 +312,7 @@ class SearchService {
       }
     });
     
+    console.log(`🔧 增強完成，總結果數: ${allResults.length}`);
     return allResults;
   }
   
