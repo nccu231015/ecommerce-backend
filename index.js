@@ -12,7 +12,16 @@ const cloudinary = require('cloudinary').v2;
 const searchService = require('./services/searchService');
 
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+    origin: [
+        'http://localhost:3000',
+        'https://ecommerce-frontend-theta-mauve.vercel.app',
+        'https://ecommerce-admin-amber.vercel.app'
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'auth-token'],
+    credentials: true
+}));
 
 // Configure Cloudinary
 cloudinary.config({
