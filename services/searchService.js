@@ -121,24 +121,52 @@ class SearchService {
     }
   }
   
-  // 關鍵字搜索
+  // 關鍵字搜索 - 支持多關鍵字搜索
   async keywordSearch(database, query, limit, filters = {}) {
     try {
-      const searchConditions = {
-        $and: [
-          { available: true },
-          {
-            $or: [
-              { name: { $regex: query, $options: 'i' } },
-              { description: { $regex: query, $options: 'i' } },
-              { category: { $regex: query, $options: 'i' } },
-              { categories: { $elemMatch: { $regex: query, $options: 'i' } } },
-              { tags: { $elemMatch: { $regex: query, $options: 'i' } } }
-            ]
-          },
-          ...Object.entries(filters).map(([key, value]) => ({ [key]: value }))
-        ]
-      };
+      // 將查詢分割成多個關鍵字（支持空格和中文標點分隔）
+      const keywords = query.trim().split(/[\s,，、]+/).filter(k => k.length > 0);
+      console.log(`🔍 關鍵字分割結果: [${keywords.join(', ')}]`);
+      
+      let searchConditions;
+      
+      if (keywords.length === 1) {
+        // 單個關鍵字：使用原來的邏輯
+        searchConditions = {
+          $and: [
+            { available: true },
+            {
+              $or: [
+                { name: { $regex: query, $options: 'i' } },
+                { description: { $regex: query, $options: 'i' } },
+                { category: { $regex: query, $options: 'i' } },
+                { categories: { $elemMatch: { $regex: query, $options: 'i' } } },
+                { tags: { $elemMatch: { $regex: query, $options: 'i' } } }
+              ]
+            },
+            ...Object.entries(filters).map(([key, value]) => ({ [key]: value }))
+          ]
+        };
+      } else {
+        // 多個關鍵字：每個關鍵字都必須在某個字段中匹配（AND 邏輯）
+        const keywordConditions = keywords.map(keyword => ({
+          $or: [
+            { name: { $regex: keyword, $options: 'i' } },
+            { description: { $regex: keyword, $options: 'i' } },
+            { category: { $regex: keyword, $options: 'i' } },
+            { categories: { $elemMatch: { $regex: keyword, $options: 'i' } } },
+            { tags: { $elemMatch: { $regex: keyword, $options: 'i' } } }
+          ]
+        }));
+        
+        searchConditions = {
+          $and: [
+            { available: true },
+            ...keywordConditions,  // 所有關鍵字都必須匹配
+            ...Object.entries(filters).map(([key, value]) => ({ [key]: value }))
+          ]
+        };
+      }
       
       const results = await database.collection('products')
         .find(searchConditions)
