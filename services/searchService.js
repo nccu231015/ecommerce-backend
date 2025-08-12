@@ -56,7 +56,7 @@ class SearchService {
     }
   }
   
-  // 向量搜索
+  // 向量搜索 - 按照 MongoDB Atlas 官方規範實現
   async vectorSearch(database, queryVector, limit, filters = {}) {
     try {
       const filterConditions = {
@@ -64,21 +64,28 @@ class SearchService {
         ...filters
       };
       
+      // 使用官方推薦的 $vectorSearch 聚合管道
       const results = await database.collection('products').aggregate([
         {
           $vectorSearch: {
-            index: "product_search_index",
-            path: "product_embedding",
-            queryVector: queryVector,
-            numCandidates: Math.min(limit * 5, 100),
+            index: "product_search_index",           // 索引名稱
+            path: "product_embedding",               // 向量字段路徑
+            queryVector: queryVector,                // 查詢向量
+            numCandidates: Math.max(limit * 10, 150), // 增加候選數量以提高準確性
             limit: limit,
-            filter: filterConditions
+            filter: filterConditions,
+            exact: false                             // 使用 ANN (近似最近鄰) 搜索
           }
         },
         {
           $addFields: {
-            search_type: "vector",
-            similarity_score: { $meta: "vectorSearchScore" }
+            search_type: "semantic",
+            similarity_score: { $meta: "vectorSearchScore" },
+            // RAG 增強：添加上下文信息
+            search_context: {
+              query_type: "semantic_vector",
+              retrieval_method: "atlas_vector_search"
+            }
           }
         },
         {
@@ -89,20 +96,27 @@ class SearchService {
             category: 1,
             new_price: 1,
             old_price: 1,
-            description: { $substr: ["$description", 0, 100] },
+            description: 1,                          // 返回完整描述用於 RAG
             categories: 1,
             tags: 1,
             search_type: 1,
-            similarity_score: 1
+            similarity_score: 1,
+            search_context: 1
+          }
+        },
+        {
+          $match: {
+            similarity_score: { $gte: 0.1 }         // 過濾低相似度結果
           }
         }
       ]).toArray();
       
-      console.log(`🔍 向量搜索找到 ${results.length} 個結果`);
+      console.log(`🔍 語義向量搜索找到 ${results.length} 個結果`);
       return results;
       
     } catch (error) {
       console.error('❌ 向量搜索失敗:', error.message);
+      console.error('可能原因：向量索引未創建或配置錯誤');
       return [];
     }
   }
@@ -157,7 +171,7 @@ class SearchService {
     }
   }
   
-  // 混合式搜索
+  // RAG 混合搜索 - 結合語義理解和關鍵字匹配
   async hybridSearch(database, query, options = {}) {
     const {
       limit = 10,
@@ -166,67 +180,121 @@ class SearchService {
       enableKeyword = true
     } = options;
     
-    console.log(`🚀 開始混合搜索: "${query}"`);
+    console.log(`🚀 開始 RAG 混合搜索: "${query}"`);
     
     const weights = this.getSearchWeights(query);
-    console.log(`⚖️ 搜索權重 - 向量: ${weights.vector}, 關鍵字: ${weights.keyword}`);
+    console.log(`⚖️ 動態權重分配 - 語義: ${weights.vector}, 關鍵字: ${weights.keyword}`);
     
-    const vectorLimit = Math.ceil(limit * weights.vector);
-    const keywordLimit = Math.ceil(limit * weights.keyword);
+    // 增加搜索範圍以提高召回率
+    const vectorLimit = Math.ceil(limit * weights.vector * 1.5);
+    const keywordLimit = Math.ceil(limit * weights.keyword * 1.5);
     
-    const promises = [];
+    const searchPromises = [];
     
-    // 向量搜索
+    // RAG 第一步：檢索 (Retrieval) - 語義向量搜索
     if (enableVector) {
       const queryVector = await this.generateQueryVector(query);
       if (queryVector) {
-        promises.push(this.vectorSearch(database, queryVector, vectorLimit, filters));
+        console.log(`🧠 執行語義檢索，目標: ${vectorLimit} 個候選`);
+        searchPromises.push(this.vectorSearch(database, queryVector, vectorLimit, filters));
       } else {
-        promises.push(Promise.resolve([]));
+        console.log(`⚠️ 向量生成失敗，跳過語義搜索`);
+        searchPromises.push(Promise.resolve([]));
       }
     } else {
-      promises.push(Promise.resolve([]));
+      searchPromises.push(Promise.resolve([]));
     }
     
-    // 關鍵字搜索
+    // RAG 第一步：檢索 (Retrieval) - 關鍵字搜索
     if (enableKeyword) {
-      promises.push(this.keywordSearch(database, query, keywordLimit, filters));
+      console.log(`🔍 執行關鍵字檢索，目標: ${keywordLimit} 個候選`);
+      searchPromises.push(this.keywordSearch(database, query, keywordLimit, filters));
     } else {
-      promises.push(Promise.resolve([]));
+      searchPromises.push(Promise.resolve([]));
     }
     
-    const [vectorResults, keywordResults] = await Promise.all(promises);
+    const [vectorResults, keywordResults] = await Promise.all(searchPromises);
     
-    // 合併結果並去重
-    const allResults = [
-      ...vectorResults.map(item => ({
-        ...item,
-        final_score: item.similarity_score * weights.vector
-      })),
-      ...keywordResults
-        .filter(item => !vectorResults.some(vr => vr.id === item.id))
-        .map(item => ({
-          ...item,
-          final_score: item.similarity_score * weights.keyword
-        }))
-    ];
+    // RAG 第二步：增強 (Augmentation) - 合併和評分
+    const enhancedResults = this.enhanceSearchResults(vectorResults, keywordResults, weights, query);
     
-    // 按相關性排序
-    const sortedResults = allResults
+    // RAG 第三步：生成 (Generation) - 排序和過濾最相關結果
+    const finalResults = enhancedResults
       .sort((a, b) => (b.final_score || 0) - (a.final_score || 0))
-      .slice(0, limit);
+      .slice(0, limit)
+      .map(item => ({
+        ...item,
+        // 添加 RAG 上下文信息
+        rag_context: {
+          retrieval_confidence: item.final_score,
+          search_strategy: item.search_type === 'semantic' ? 'vector_embedding' : 'keyword_matching',
+          query_intent: this.analyzeQueryIntent(query)
+        }
+      }));
     
-    console.log(`✅ 混合搜索完成 - 向量: ${vectorResults.length}, 關鍵字: ${keywordResults.length}, 總計: ${sortedResults.length}`);
+    console.log(`✅ RAG 混合搜索完成`);
+    console.log(`📊 檢索統計 - 語義: ${vectorResults.length}, 關鍵字: ${keywordResults.length}`);
+    console.log(`🎯 最終結果: ${finalResults.length} 個高相關性商品`);
     
     return {
-      results: sortedResults,
+      results: finalResults,
       breakdown: {
         vector_results: vectorResults.length,
         keyword_results: keywordResults.length,
-        total_unique: sortedResults.length,
-        weights: weights
+        total_unique: finalResults.length,
+        weights: weights,
+        rag_method: "hybrid_retrieval_augmented_generation"
       }
     };
+  }
+  
+  // RAG 增強：結果合併和評分
+  enhanceSearchResults(vectorResults, keywordResults, weights, originalQuery) {
+    const allResults = [];
+    
+    // 處理語義搜索結果
+    vectorResults.forEach(item => {
+      allResults.push({
+        ...item,
+        final_score: (item.similarity_score || 0.5) * weights.vector,
+        search_type: 'semantic',
+        relevance_reason: '語義相似性匹配'
+      });
+    });
+    
+    // 處理關鍵字搜索結果（去重）
+    keywordResults.forEach(item => {
+      const existingIndex = allResults.findIndex(existing => existing.id === item.id);
+      if (existingIndex >= 0) {
+        // 如果已存在，增強分數（混合信號）
+        allResults[existingIndex].final_score += (item.similarity_score || 0.5) * weights.keyword;
+        allResults[existingIndex].search_type = 'hybrid';
+        allResults[existingIndex].relevance_reason = '語義+關鍵字雙重匹配';
+      } else {
+        // 新結果
+        allResults.push({
+          ...item,
+          final_score: (item.similarity_score || 0.5) * weights.keyword,
+          search_type: 'keyword',
+          relevance_reason: '關鍵字精確匹配'
+        });
+      }
+    });
+    
+    return allResults;
+  }
+  
+  // 分析查詢意圖（用於 RAG 上下文）
+  analyzeQueryIntent(query) {
+    const queryLower = query.toLowerCase();
+    
+    if (/品牌|牌子|brand/.test(queryLower)) return 'brand_focused';
+    if (/顏色|色|color/.test(queryLower)) return 'color_focused';
+    if (/價格|便宜|貴|元|price/.test(queryLower)) return 'price_focused';
+    if (/約會|聚會|派對|上班|運動/.test(queryLower)) return 'occasion_focused';
+    if (/風格|款式|style/.test(queryLower)) return 'style_focused';
+    
+    return 'general_product_search';
   }
 }
 
