@@ -352,6 +352,10 @@ class SearchService {
       const data = await response.json();
       const responseText = data.choices[0]?.message?.content?.trim() || '';
       
+      // 添加詳細調試信息
+      console.log(`📝 GPT-4o 完整回應:`, JSON.stringify(data, null, 2));
+      console.log(`📝 GPT-4o 內容: "${responseText}"`);
+      
       try {
         const parsed = JSON.parse(responseText);
         console.log(`✅ LLM 優化結果: "${originalQuery}" → 關鍵詞: "${parsed.keywords}", 篩選: ${JSON.stringify(parsed.filters)}`);
@@ -372,19 +376,62 @@ class SearchService {
     }
   }
 
+  // 手動解析查詢（臨時修復，繞過 LLM 優化問題）
+  parseQueryManually(query) {
+    const filters = {};
+    const queryLower = query.toLowerCase();
+    
+    // 解析價格條件
+    const pricePatterns = [
+      /價格\s*(\d+)\s*以下/,
+      /(\d+)\s*以下/,
+      /價格\s*(\d+)\s*~\s*(\d+)/,
+      /(\d+)\s*~\s*(\d+)/,
+      /(\d+)\s*-\s*(\d+)/
+    ];
+    
+    for (const pattern of pricePatterns) {
+      const match = queryLower.match(pattern);
+      if (match) {
+        if (pattern.source.includes('以下')) {
+          filters.maxPrice = parseInt(match[1]);
+          console.log(`🔍 解析到最高價格: ${filters.maxPrice}`);
+        } else if (pattern.source.includes('~') || pattern.source.includes('-')) {
+          filters.minPrice = parseInt(match[1]);
+          filters.maxPrice = parseInt(match[2]);
+          console.log(`🔍 解析到價格範圍: ${filters.minPrice} - ${filters.maxPrice}`);
+        }
+        break;
+      }
+    }
+    
+    // 解析類別
+    if (/童裝|兒童|小孩|寶寶/.test(queryLower)) {
+      filters.category = "kid";
+      console.log(`🔍 解析到類別: kid`);
+    } else if (/女裝|女生|女性|淑女/.test(queryLower)) {
+      filters.category = "women";
+      console.log(`🔍 解析到類別: women`);
+    } else if (/男裝|男生|男性|紳士/.test(queryLower)) {
+      filters.category = "men";
+      console.log(`🔍 解析到類別: men`);
+    }
+    
+    return filters;
+  }
+
   // 純語意向量搜索 - 按照 MongoDB Atlas 官方標準實現
   async vectorOnlySearch(database, query, limit, filters = {}) {
     console.log(`🧠 開始純語意向量搜索: "${query}"`);
     
     try {
-      // 🤖 第一步：LLM 優化查詢
-      const optimization = await this.optimizeSearchQuery(query);
-      const optimizedQuery = optimization.keywords;
-      const llmFilters = optimization.filters;
+      // 🔧 臨時修復：手動解析價格和類別（繞過 LLM 優化問題）
+      const manualFilters = this.parseQueryManually(query);
+      const optimizedQuery = query; // 暫時使用原始查詢
       
-      // 合併 LLM 篩選條件和用戶篩選條件
-      const combinedFilters = { ...filters, ...llmFilters };
-      console.log(`🔍 合併篩選條件:`, combinedFilters);
+      // 合併手動解析的篩選條件和用戶篩選條件
+      const combinedFilters = { ...filters, ...manualFilters };
+      console.log(`🔍 手動解析篩選條件:`, combinedFilters);
       
       // 生成查詢向量（使用優化後的查詢）
       const queryVector = await this.generateQueryVector(optimizedQuery);

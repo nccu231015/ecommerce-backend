@@ -545,7 +545,12 @@ app.post("/test-llm-optimization", async (req, res) => {
         res.json({
             success: true,
             original_query: query,
-            optimization: optimization
+            optimization: optimization,
+            debug: {
+                has_keywords: !!optimization.keywords,
+                has_filters: Object.keys(optimization.filters || {}).length > 0,
+                filters_count: Object.keys(optimization.filters || {}).length
+            }
         });
 
     } catch (error) {
