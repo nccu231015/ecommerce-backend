@@ -529,16 +529,20 @@ app.post("/debug-search-detailed", async (req, res) => {
 // API for AI search
 app.post("/ai-search", async (req, res) => {
     try {
+        console.log(`🚨 收到 AI 搜索請求！`);
+        console.log(`📨 請求體:`, req.body);
+        
         const { query, limit = 10, filters = {}, searchType = 'hybrid' } = req.body;
         
         if (!query || !query.trim()) {
+            console.log(`❌ 搜索查詢為空`);
             return res.status(400).json({
                 success: false,
                 message: "搜索查詢不能為空"
             });
         }
 
-        console.log(`🔍 AI搜索請求: "${query}", 類型: ${searchType}`);
+        console.log(`🔍 AI搜索請求: "${query}", limit: ${limit}`);
         
         const database = await connectToDatabase();
         let searchResults;
