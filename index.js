@@ -526,6 +526,34 @@ app.post("/debug-search-detailed", async (req, res) => {
     }
 });
 
+// API for testing LLM query optimization (debug only)
+app.post("/test-llm-optimization", async (req, res) => {
+    try {
+        const { query } = req.body;
+        if (!query) {
+            return res.status(400).json({
+                success: false,
+                message: "查詢不能為空"
+            });
+        }
+
+        console.log(`🧪 測試 LLM 優化: "${query}"`);
+        
+        const database = await connectToDatabase();
+        const optimization = await searchService.optimizeSearchQuery(query);
+        
+        res.json({
+            success: true,
+            original_query: query,
+            optimization: optimization
+        });
+
+    } catch (error) {
+        console.error("LLM 優化測試錯誤:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // API for AI search
 app.post("/ai-search", async (req, res) => {
     try {
