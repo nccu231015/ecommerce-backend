@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const port = process.env.PORT || 4000;
 const express = require('express');
 const app = express();
@@ -7,7 +9,6 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const cloudinary = require('cloudinary').v2;
-require('dotenv').config();
 const searchService = require('../services/searchService');
 
 app.use(express.json());
@@ -460,7 +461,7 @@ app.post('/getcart', fetchUser, async (req, res) => {
     }
 });
 
-// 生成商品向量嵌入的函數
+// 生成商品向量嵌入的函數 - 使用 searchService 中的功能
 async function generateProductEmbedding(product) {
     try {
         const searchableText = [
@@ -471,18 +472,8 @@ async function generateProductEmbedding(product) {
             (product.tags || []).join(' ')
         ].filter(text => text.trim().length > 0).join(' ');
         
-        const OpenAI = require('openai');
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY
-        });
-        
-        const response = await openai.embeddings.create({
-            model: "text-embedding-ada-002",
-            input: searchableText,
-            encoding_format: "float"
-        });
-        
-        return response.data[0].embedding;
+        // 重用 searchService 的向量生成功能
+        return await searchService.generateQueryVector(searchableText);
     } catch (error) {
         console.error(`❌ 商品向量生成失敗:`, error.message);
         return null;
