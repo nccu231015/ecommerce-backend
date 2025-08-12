@@ -456,7 +456,71 @@ class SearchService {
     }
   }
 
+  // 判斷是否為純類別查詢
+  isPureCategoryQuery(originalQuery, llmFilters) {
+    const queryLower = originalQuery.toLowerCase().trim();
+    const pureCategoryTerms = ['女裝', '男裝', '童裝', '兒童', '小孩', '女生', '男生', '女性', '男性'];
+    
+    // 檢查是否只包含類別詞且沒有其他描述
+    const isPureCategory = pureCategoryTerms.some(term => queryLower === term) ||
+                          (queryLower.length <= 4 && llmFilters.category && !llmFilters.minPrice && !llmFilters.maxPrice);
+    
+    return isPureCategory;
+  }
 
+  // 處理純類別搜索
+  async handlePureCategorySearch(database, filters, limit) {
+    try {
+      const productsCollection = database.collection('products');
+      
+      const filterConditions = {
+        available: { $eq: true }
+      };
+      
+      if (filters.category) {
+        filterConditions.category = { $eq: filters.category };
+      }
+      
+      console.log(`🏷️ 純類別搜索條件:`, filterConditions);
+      
+      const results = await productsCollection
+        .find(filterConditions)
+        .limit(limit)
+        .toArray();
+      
+      // 為結果添加搜索元數據
+      const formattedResults = results.map(item => ({
+        ...item,
+        search_type: 'category',
+        similarity_score: 1.0  // 類別匹配給予滿分
+      }));
+      
+      console.log(`✅ 純類別搜索完成: ${formattedResults.length} 個結果`);
+      
+      return {
+        results: formattedResults,
+        breakdown: {
+          pre_filtered: formattedResults.length,
+          vector_results: 0,
+          total_results: formattedResults.length,
+          search_method: "pure_category_search"
+        }
+      };
+      
+    } catch (error) {
+      console.error('❌ 純類別搜索失敗:', error.message);
+      return {
+        results: [],
+        breakdown: {
+          pre_filtered: 0,
+          vector_results: 0,
+          total_results: 0,
+          search_method: "pure_category_search",
+          error: error.message
+        }
+      };
+    }
+  }
 
   // 手動解析查詢（臨時修復，繞過 LLM 優化問題）
   parseQueryManually(query) {
@@ -512,6 +576,13 @@ class SearchService {
       const optimization = await this.optimizeSearchQuery(query);
       const optimizedQuery = optimization.keywords;
       const llmFilters = optimization.filters;
+      
+      // 🎯 特殊處理：純類別查詢
+      const isPureCategoryQuery = this.isPureCategoryQuery(query, llmFilters);
+      if (isPureCategoryQuery) {
+        console.log(`🏷️ 檢測到純類別查詢，跳過向量搜索`);
+        return await this.handlePureCategorySearch(database, llmFilters, limit);
+      }
       
       // 合併 LLM 篩選條件和用戶篩選條件
       const combinedFilters = { ...filters, ...llmFilters };
