@@ -489,6 +489,43 @@ async function generateProductEmbedding(product) {
     }
 }
 
+// Debug Search endpoint - 臨時調試用
+app.post("/debug-search-detailed", async (req, res) => {
+    try {
+        const { query, searchType = "hybrid", limit = 10 } = req.body;
+        
+        console.log(`🐛 詳細調試搜索: "${query}", 類型: ${searchType}`);
+        
+        // 直接測試關鍵字搜索
+        const keywordResults = await searchService.keywordSearch(db, query, limit);
+        console.log(`🐛 關鍵字搜索結果:`, keywordResults.length);
+        
+        // 直接測試向量搜索
+        let vectorResults = [];
+        try {
+            vectorResults = await searchService.vectorSearch(db, query, limit);
+            console.log(`🐛 向量搜索結果:`, vectorResults.length);
+        } catch (error) {
+            console.log(`🐛 向量搜索失敗:`, error.message);
+        }
+        
+        res.json({
+            success: true,
+            debug: {
+                query,
+                keyword_results_count: keywordResults.length,
+                vector_results_count: vectorResults.length,
+                keyword_sample: keywordResults.slice(0, 2).map(r => ({ id: r.id, name: r.name })),
+                vector_sample: vectorResults.slice(0, 2).map(r => ({ id: r.id, name: r.name }))
+            }
+        });
+        
+    } catch (error) {
+        console.error("調試搜索錯誤:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // API for AI search
 app.post("/ai-search", async (req, res) => {
     try {

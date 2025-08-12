@@ -156,6 +156,12 @@ class SearchService {
       const keywords = query.trim().split(/[\s,，、]+/).filter(k => k.length > 0);
       console.log(`🔍 關鍵字分割結果: [${keywords.join(', ')}]`);
       
+      // 如果沒有有效關鍵字，返回空結果
+      if (keywords.length === 0) {
+        console.log(`⚠️ 沒有有效關鍵字，返回空結果`);
+        return [];
+      }
+      
       let searchConditions;
       
       if (keywords.length === 1) {
