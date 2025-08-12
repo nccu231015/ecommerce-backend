@@ -106,7 +106,7 @@ class SearchService {
         },
         {
           $match: {
-            similarity_score: { $gte: 0.1 }         // 過濾低相似度結果
+            similarity_score: { $gte: 0.3 }         // 提高相似度閾值，過濾低質量結果
           }
         }
       ]).toArray();
@@ -248,17 +248,20 @@ class SearchService {
     };
   }
   
-  // RAG 增強：結果合併和評分
+  // RAG 增強：結果合併和評分 - 調整信心度計算
   enhanceSearchResults(vectorResults, keywordResults, weights, originalQuery) {
     const allResults = [];
     
     // 處理語義搜索結果
     vectorResults.forEach(item => {
+      // 調整語義搜索的信心度計算
+      const adjustedScore = this.adjustConfidenceScore(item.similarity_score || 0.4, 'semantic');
       allResults.push({
         ...item,
-        final_score: (item.similarity_score || 0.5) * weights.vector,
+        final_score: adjustedScore * weights.vector,
         search_type: 'semantic',
-        relevance_reason: '語義相似性匹配'
+        relevance_reason: '語義相似性匹配',
+        raw_similarity: item.similarity_score
       });
     });
     
@@ -267,21 +270,45 @@ class SearchService {
       const existingIndex = allResults.findIndex(existing => existing.id === item.id);
       if (existingIndex >= 0) {
         // 如果已存在，增強分數（混合信號）
-        allResults[existingIndex].final_score += (item.similarity_score || 0.5) * weights.keyword;
+        const keywordScore = this.adjustConfidenceScore(item.similarity_score || 0.3, 'keyword');
+        allResults[existingIndex].final_score += keywordScore * weights.keyword;
         allResults[existingIndex].search_type = 'hybrid';
         allResults[existingIndex].relevance_reason = '語義+關鍵字雙重匹配';
       } else {
         // 新結果
+        const adjustedScore = this.adjustConfidenceScore(item.similarity_score || 0.3, 'keyword');
         allResults.push({
           ...item,
-          final_score: (item.similarity_score || 0.5) * weights.keyword,
+          final_score: adjustedScore * weights.keyword,
           search_type: 'keyword',
-          relevance_reason: '關鍵字精確匹配'
+          relevance_reason: '關鍵字精確匹配',
+          raw_similarity: item.similarity_score
         });
       }
     });
     
     return allResults;
+  }
+  
+  // 調整信心度分數，讓它更符合實際情況
+  adjustConfidenceScore(rawScore, searchType) {
+    if (!rawScore) return 0.2;
+    
+    if (searchType === 'semantic') {
+      // 語義搜索：向量相似度通常較高，需要降低
+      if (rawScore > 0.9) return 0.75;      // 非常相似 -> 75%
+      if (rawScore > 0.8) return 0.65;      // 很相似 -> 65%
+      if (rawScore > 0.7) return 0.55;      // 相似 -> 55%
+      if (rawScore > 0.6) return 0.45;      // 有些相似 -> 45%
+      if (rawScore > 0.5) return 0.35;      // 略微相似 -> 35%
+      return 0.25;                          // 低相似度 -> 25%
+    } else {
+      // 關鍵字搜索：基於匹配程度
+      if (rawScore > 0.8) return 0.70;      // 多重關鍵字匹配 -> 70%
+      if (rawScore > 0.6) return 0.55;      // 部分匹配 -> 55%
+      if (rawScore > 0.4) return 0.40;      // 基本匹配 -> 40%
+      return 0.25;                          // 弱匹配 -> 25%
+    }
   }
   
   // 分析查詢意圖（用於 RAG 上下文）
