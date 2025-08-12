@@ -27,7 +27,6 @@ class SearchService {
   }
   
 
-  
   // 向量搜索 - 按照 MongoDB Atlas 官方規範實現
   async vectorSearch(database, queryVector, limit, filters = {}) {
     try {
@@ -168,7 +167,6 @@ class SearchService {
   }
   
 
-  
   // LLM 查詢優化 - 將自然語言轉換為適合向量搜索的關鍵詞和篩選條件
   async optimizeSearchQuery(originalQuery) {
     try {
@@ -465,8 +463,6 @@ class SearchService {
     }
   }
 
-
-
   // 純語意向量搜索 - LLM 先篩選，再做語意搜索
   async vectorOnlySearch(database, query, limit, filters = {}) {
     console.log(`🧠 開始智能搜索流程: "${query}"`);
@@ -539,7 +535,7 @@ class SearchService {
       console.log(`✅ 智能搜索完成，找到 ${vectorResults.length} 個結果`);
       
       // 按相似度排序，保留原始相似度分數
-      const finalResults = vectorResults
+      const sortedResults = vectorResults
         .map(item => ({
           ...item,
           search_type: 'semantic'
@@ -547,12 +543,21 @@ class SearchService {
         .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
         .slice(0, limit);
       
-      console.log(`🎯 最終返回 ${finalResults.length} 個高相關性商品`);
+      console.log(`🎯 語意搜索找到 ${sortedResults.length} 個商品`);
+      
+      // 🤖 LLM 智能推薦標記：分析哪個商品最符合用戶需求
+      let finalResults = sortedResults;
+      if (sortedResults.length > 1) {
+        console.log(`🧠 啟動 LLM 智能推薦分析...`);
+        finalResults = await this.addLLMRecommendation(query, sortedResults);
+      }
+      
+      console.log(`🎯 返回 ${finalResults.length} 個商品（含智能推薦標記）`);
       if (finalResults.length > 0) {
-        console.log(`📝 結果樣本:`, finalResults.slice(0, 3).map(r => ({ 
-          name: r.name, 
-          score: r.similarity_score 
-        })));
+        const topRecommended = finalResults.find(r => r.llm_recommended);
+        if (topRecommended) {
+          console.log(`⭐ LLM 最推薦: ${topRecommended.name} - ${topRecommended.recommendation_reason}`);
+        }
       }
       
       return {
@@ -579,14 +584,109 @@ class SearchService {
       };
     }
   }
-  
 
-  
+  // LLM 智能推薦標記 - 分析搜索結果中最符合用戶需求的商品
+  async addLLMRecommendation(originalQuery, searchResults) {
+    try {
+      console.log(`🤖 LLM 推薦分析: "${originalQuery}"`);
+      
+      // 準備商品資訊給 LLM 分析
+      const productsForAnalysis = searchResults.map((product, index) => ({
+        index: index,
+        name: product.name,
+        price: product.new_price,
+        category: product.category,
+        description: product.description?.substring(0, 200) || '', // 限制描述長度
+        similarity_score: product.similarity_score?.toFixed(3)
+      }));
 
-  
+      const recommendationPrompt = `你是一個專業的電商推薦助手。用戶搜索了："${originalQuery}"
 
-  
+以下是語意搜索找到的商品列表：
 
+${productsForAnalysis.map(p => 
+  `${p.index + 1}. ${p.name}
+   價格: $${p.price}
+   類別: ${p.category}
+   描述: ${p.description}
+   相似度: ${p.similarity_score}`
+).join('\n\n')}
+
+請分析哪個商品最符合用戶的搜索意圖，並以JSON格式回應：
+
+{
+  "recommended_index": 0,
+  "reason": "推薦理由（簡短說明為什麼這個商品最符合需求）"
+}
+
+注意：
+- recommended_index 是商品在列表中的索引（0開始）
+- reason 要簡潔明確，50字以內
+- 綜合考慮價格、功能、描述匹配度等因素`;
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'user', content: recommendationPrompt }
+          ],
+          max_tokens: 150,
+          temperature: 0.3
+        })
+      });
+
+      if (!response.ok) {
+        console.log(`⚠️ LLM 推薦分析失敗，狀態碼: ${response.status}`);
+        return searchResults; // 返回原始結果
+      }
+
+      const data = await response.json();
+      const responseText = data.choices[0]?.message?.content?.trim() || '';
+      
+      // 清理 markdown 代碼塊格式
+      const cleanedText = responseText
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim();
+      
+      console.log(`📝 LLM 推薦原始回應: "${responseText}"`);
+      
+      try {
+        const recommendation = JSON.parse(cleanedText);
+        const recommendedIndex = recommendation.recommended_index;
+        const reason = recommendation.reason;
+        
+        if (recommendedIndex >= 0 && recommendedIndex < searchResults.length) {
+          // 標記推薦商品
+          const updatedResults = searchResults.map((product, index) => ({
+            ...product,
+            llm_recommended: index === recommendedIndex,
+            recommendation_reason: index === recommendedIndex ? reason : undefined
+          }));
+          
+          console.log(`✅ LLM 推薦: 第 ${recommendedIndex + 1} 個商品 - ${reason}`);
+          return updatedResults;
+        } else {
+          console.log(`⚠️ 推薦索引無效: ${recommendedIndex}`);
+          return searchResults;
+        }
+        
+      } catch (parseError) {
+        console.log(`⚠️ LLM 推薦 JSON 解析失敗`);
+        console.log(`📝 清理後內容: "${cleanedText}"`);
+        return searchResults; // 返回原始結果
+      }
+      
+    } catch (error) {
+      console.error('❌ LLM 推薦分析失敗:', error.message);
+      return searchResults; // 失敗時返回原始結果
+    }
+  }
 }
 
 module.exports = new SearchService();
