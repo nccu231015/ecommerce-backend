@@ -66,10 +66,29 @@ class SearchService {
         return [];
       }
       
+      // 構建篩選條件
       const filterConditions = {
-        available: { $eq: true },
-        ...filters
+        available: { $eq: true }
       };
+      
+      // 處理價格篩選
+      if (filters.minPrice || filters.maxPrice) {
+        const priceFilter = {};
+        if (filters.minPrice) {
+          priceFilter.$gte = parseInt(filters.minPrice);
+        }
+        if (filters.maxPrice) {
+          priceFilter.$lte = parseInt(filters.maxPrice);
+        }
+        filterConditions.new_price = priceFilter;
+      }
+      
+      // 添加其他篩選條件（排除價格相關）
+      Object.keys(filters).forEach(key => {
+        if (key !== 'minPrice' && key !== 'maxPrice') {
+          filterConditions[key] = filters[key];
+        }
+      });
       
       console.log(`🔍 向量搜索過濾條件:`, filterConditions);
       
@@ -242,26 +261,32 @@ class SearchService {
     }
   }
   
-  // LLM 查詢優化 - 將自然語言轉換為適合向量搜索的關鍵詞
+  // LLM 查詢優化 - 將自然語言轉換為適合向量搜索的關鍵詞和篩選條件
   async optimizeSearchQuery(originalQuery) {
     try {
       console.log(`🤖 LLM 查詢優化: "${originalQuery}"`);
       
-      const optimizationPrompt = `你是一個電商搜索查詢優化助手。請將用戶的自然語言查詢轉換為適合商品搜索的關鍵詞。
+      const optimizationPrompt = `你是一個電商搜索查詢優化助手。請分析用戶的自然語言查詢，提取搜索關鍵詞和篩選條件。
 
-規則：
-1. 提取核心商品特徵（顏色、類型、風格、場合等）
-2. 移除無關的語氣詞和問句結構
-3. 保留重要的修飾詞
-4. 輸出簡潔的關鍵詞組合
+請以JSON格式回應，包含：
+1. keywords: 適合向量搜索的關鍵詞
+2. filters: 篩選條件對象
 
 範例：
-- 輸入："我想找一件適合約會穿的黑色外套" → 輸出："黑色外套 約會"
-- 輸入："有沒有便宜一點的運動服？" → 輸出："運動服 便宜"
-- 輸入："給我推薦冬天保暖的衣服" → 輸出："冬季保暖衣服"
+輸入："我想找一件適合約會穿的黑色外套"
+輸出：{"keywords": "黑色外套 約會", "filters": {}}
+
+輸入："有沒有便宜一點的運動服？"
+輸出：{"keywords": "運動服", "filters": {"maxPrice": 800}}
+
+輸入："我想要找童裝，價格1000以下的"
+輸出：{"keywords": "童裝 兒童", "filters": {"maxPrice": 1000}}
+
+輸入："給我推薦冬天保暖的衣服，預算500-800"
+輸出：{"keywords": "冬季保暖衣服", "filters": {"minPrice": 500, "maxPrice": 800}}
 
 用戶查詢："${originalQuery}"
-優化後的搜索詞：`;
+請回應JSON：`;
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -270,29 +295,38 @@ class SearchService {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
+          model: 'gpt-4o',
           messages: [
             { role: 'user', content: optimizationPrompt }
           ],
-          max_tokens: 100,
+          max_tokens: 150,
           temperature: 0.3
         })
       });
 
       if (!response.ok) {
         console.log(`⚠️ LLM 優化失敗，使用原始查詢`);
-        return originalQuery;
+        return { keywords: originalQuery, filters: {} };
       }
 
       const data = await response.json();
-      const optimizedQuery = data.choices[0]?.message?.content?.trim() || originalQuery;
+      const responseText = data.choices[0]?.message?.content?.trim() || '';
       
-      console.log(`✅ LLM 優化結果: "${originalQuery}" → "${optimizedQuery}"`);
-      return optimizedQuery;
+      try {
+        const parsed = JSON.parse(responseText);
+        console.log(`✅ LLM 優化結果: "${originalQuery}" → 關鍵詞: "${parsed.keywords}", 篩選: ${JSON.stringify(parsed.filters)}`);
+        return {
+          keywords: parsed.keywords || originalQuery,
+          filters: parsed.filters || {}
+        };
+      } catch (parseError) {
+        console.log(`⚠️ JSON 解析失敗，使用原始查詢: ${responseText}`);
+        return { keywords: originalQuery, filters: {} };
+      }
       
     } catch (error) {
       console.error('❌ LLM 查詢優化失敗:', error.message);
-      return originalQuery; // 失敗時回退到原始查詢
+      return { keywords: originalQuery, filters: {} }; // 失敗時回退到原始查詢
     }
   }
 
@@ -302,7 +336,13 @@ class SearchService {
     
     try {
       // 🤖 第一步：LLM 優化查詢
-      const optimizedQuery = await this.optimizeSearchQuery(query);
+      const optimization = await this.optimizeSearchQuery(query);
+      const optimizedQuery = optimization.keywords;
+      const llmFilters = optimization.filters;
+      
+      // 合併 LLM 篩選條件和用戶篩選條件
+      const combinedFilters = { ...filters, ...llmFilters };
+      console.log(`🔍 合併篩選條件:`, combinedFilters);
       
       // 生成查詢向量（使用優化後的查詢）
       const queryVector = await this.generateQueryVector(optimizedQuery);
@@ -320,8 +360,8 @@ class SearchService {
       
       console.log(`🔍 執行語意向量搜索，向量維度: ${queryVector.length}`);
       
-      // 執行向量搜索
-      const vectorResults = await this.vectorSearch(database, queryVector, limit, filters);
+      // 執行向量搜索（使用合併後的篩選條件）
+      const vectorResults = await this.vectorSearch(database, queryVector, limit, combinedFilters);
       
       console.log(`✅ 向量搜索完成，找到 ${vectorResults.length} 個結果`);
       
