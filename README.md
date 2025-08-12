@@ -1,123 +1,192 @@
-# 電商網站後端 API
+# 電商網站專案
 
-這是電商網站的後端服務，提供完整的 RESTful API 支持產品管理、用戶認證、購物車功能等。
+這是一個完整的電子商務網站解決方案，包含前端客戶界面、後端 API 服務和管理員後台三個主要部分。
+
+## 專案架構
+
+```
+Ecommerce Website/
+├── frontend/       # 客戶端網站 (React)
+├── backend/        # API 服務 (Express + MongoDB)
+└── admin/          # 管理員後台 (React + Vite)
+```
+
+## 功能概述
+
+### 🧠 AI 智能搜索 (核心特色)
+- **純語意向量搜索**: 理解自然語言查詢意圖
+- **智能查詢分析**: 使用 GPT-4o 提取關鍵詞和篩選條件
+- **智能搜索分支**: 
+  - 純類別搜索 (女裝、男裝、童裝)
+  - 語意搜索 (黑色外套、約會穿的)
+  - 智能篩選 (價格1000以下的商品)
+- **⭐ LLM 智能推薦**: GPT-4o 分析搜索結果，標記最符合需求的商品
+- **精確匹配**: 點擊搜索建議進行精確匹配
+
+### 前端功能
+- 商品瀏覽和搜尋
+- **🎯 AI 語意搜索頁面** (新增)
+- 商品類別頁面 (男裝、女裝、兒童裝)
+- 商品詳情頁面
+- 購物車功能
+- 用戶註冊和登入
+- 訂單管理
+
+### 後端功能
+- RESTful API
+- **🤖 AI 搜索 API** (新增)
+- **向量化服務** (OpenAI Embeddings)
+- 使用者認證 (JWT)
+- 產品管理 API
+- 購物車數據存儲
+- 圖片上傳服務 (Cloudinary)
+
+### 管理員後台
+- 產品新增和管理
+- **自動向量化**: 新產品上傳時自動生成向量
+- 產品圖片上傳 (Cloudinary)
+- 產品描述、類別、標籤管理
+- 產品下架功能
 
 ## 技術棧
 
-- **Node.js** - 運行環境
-- **Express.js** - Web 框架
-- **MongoDB** - 資料庫
-- **Mongoose** - MongoDB ODM
-- **JWT** - 用戶認證
-- **Multer** - 檔案上傳處理
-- **CORS** - 跨域請求支持
+### 🧠 AI 搜索技術
+- **OpenAI GPT-4o**: 自然語言查詢分析
+- **OpenAI Embeddings**: text-embedding-ada-002 (1536維)
+- **MongoDB Atlas Vector Search**: 語意向量搜索
+- **Cloudinary**: 雲端圖片存儲和優化
 
-## 主要功能
+### 前端
+- React 19
+- React Router 7
+- Context API (狀態管理)
+- **AISearch 組件**: 智能搜索界面
 
-### 產品管理
-- 獲取所有產品 (`GET /allproduct`)
-- 新增產品 (`POST /addproduct`)
-- 刪除產品 (`POST /removeproduct`)
-- 獲取新品推薦 (`GET /newcollection`)
-- 獲取熱門女裝 (`GET /popularinwomen`)
+### 後端
+- Express.js
+- **MongoDB Atlas**: 雲端資料庫 + 向量搜索
+- **SearchService**: AI 搜索邏輯封裝
+- JWT (認證)
+- Multer (檔案上傳)
 
-### 用戶認證
-- 用戶註冊 (`POST /signup`)
-- 用戶登入 (`POST /login`)
-- JWT Token 驗證
+### 管理員後台
+- React 19
+- Vite 6 (構建工具)
+- React Router 7
 
-### 購物車功能
-- 添加商品到購物車 (`POST /addtocart`)
-- 從購物車移除商品 (`POST /removefromcart`)
-- 獲取購物車內容 (`POST /getcart`)
+## 快速開始
 
-### 檔案上傳
-- 產品圖片上傳 (`POST /upload`)
-- 靜態檔案服務 (`/images`)
+### 環境設定
 
-## 環境變數
+#### 1. 設定環境變數
+在 `backend/` 目錄下創建 `.env` 檔案：
 
-```env
-PORT=4000
-MONGODB_URI=your_mongodb_connection_string
-BASE_URL=your_base_url
+```bash
+# OpenAI API (AI 搜索必需)
+OPENAI_API_KEY=sk-your-openai-key
+
+# MongoDB Atlas (向量搜索必需)
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database
+
+# Cloudinary (圖片存儲)
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
 ```
 
-## 本地開發
+#### 2. MongoDB Atlas 向量索引設定
+在 MongoDB Atlas 中創建向量搜索索引：
+- 索引名稱: `vector_index`
+- 詳細設定請參考: [AI_SEARCH_README.md](AI_SEARCH_README.md)
 
-1. 安裝依賴：
+### 本地開發
+
+#### 1. 啟動後端服務
+
 ```bash
+cd backend
 npm install
+node index.js
 ```
 
-2. 啟動開發服務器：
+後端服務將在 http://localhost:4000 運行
+
+#### 2. 啟動前端網站
+
 ```bash
+cd frontend
+npm install
 npm start
 ```
 
-3. API 將在 `http://localhost:4000` 運行
+前端將在 http://localhost:3000 運行
 
-## 部署
+#### 3. 啟動管理員後台
 
-### Vercel 部署
-1. 連接 GitHub repository
-2. 設置環境變數
-3. 自動部署
-
-### 資料庫結構
-
-#### Products Collection
-```javascript
-{
-  id: Number,
-  name: String,
-  image: String,
-  category: String,
-  new_price: Number,
-  old_price: Number,
-  description: String,
-  categories: [String],
-  tags: [String],
-  date: Date,
-  available: Boolean
-}
+```bash
+cd admin
+npm install
+npm run dev
 ```
 
-#### Users Collection
-```javascript
-{
-  name: String,
-  email: String,
-  password: String,
-  cartData: Object,
-  date: Date
-}
-```
+管理員後台將在 http://localhost:5173 運行
 
-## API 端點
+## 🔄 資料流程
 
-| 方法 | 端點 | 描述 | 認證 |
-|------|------|------|------|
-| GET | `/` | 健康檢查 | 否 |
-| GET | `/allproduct` | 獲取所有產品 | 否 |
-| POST | `/addproduct` | 新增產品 | 否 |
-| POST | `/removeproduct` | 刪除產品 | 否 |
-| GET | `/newcollection` | 獲取新品推薦 | 否 |
-| GET | `/popularinwomen` | 獲取熱門女裝 | 否 |
-| POST | `/signup` | 用戶註冊 | 否 |
-| POST | `/login` | 用戶登入 | 否 |
-| POST | `/addtocart` | 添加到購物車 | 是 |
-| POST | `/removefromcart` | 從購物車移除 | 是 |
-| POST | `/getcart` | 獲取購物車 | 是 |
-| POST | `/upload` | 上傳圖片 | 否 |
+### AI 搜索流程
+1. **用戶** 輸入自然語言查詢 (如: "我要找童裝，價格1000以下")
+2. **GPT-4o** 分析查詢，提取關鍵詞和篩選條件
+3. **系統** 智能判斷搜索類型：
+   - 純類別查詢 → 直接返回該類別所有商品
+   - 描述性查詢 → 語意向量搜索
+4. **MongoDB Atlas** 執行向量搜索，返回相似商品
+5. **⭐ LLM 智能推薦** 分析搜索結果，標記最符合用戶需求的商品
+6. **前端** 顯示搜索結果，推薦商品帶有金色 "⭐ AI 最推薦" 徽章
 
-## 注意事項
+### 商品管理流程
+1. **管理員** 通過後台添加產品 (名稱、描述、圖片、價格等)
+2. **系統** 自動生成產品向量 (OpenAI Embeddings)
+3. **用戶** 瀏覽商品、使用 AI 搜索、添加到購物車
+4. 購物車數據同步到後端資料庫
 
-- 所有需要認證的端點都需要在 Header 中包含 `auth-token`
-- 圖片上傳目前存儲在本地 `upload/images` 目錄
-- 生產環境建議使用雲端存儲服務（如 Cloudinary）
-- 確保 MongoDB 連接字串的安全性
+## 🚀 線上部署
 
-## 開發者
+### Vercel 部署連結
+- **前端**: https://ecommerce-frontend-theta-mauve.vercel.app
+- **後端**: https://ecommerce-backend-indol-xi.vercel.app
+- **管理後台**: https://ecommerce-admin-amber.vercel.app
 
-適用於電商網站的完整後端解決方案。
+### 部署設定
+詳細部署步驟請參考各子目錄的部署說明。
+
+## 📋 環境需求
+
+- Node.js 18+
+- **MongoDB Atlas** (向量搜索支援)
+- **OpenAI API Key** (AI 搜索功能)
+- **Cloudinary 帳戶** (圖片存儲)
+- 網路連線 (API 通訊)
+
+## 📚 詳細文檔
+
+- **AI 搜索系統**: [AI_SEARCH_README.md](AI_SEARCH_README.md)
+- **部署指南**: 各子目錄 README
+- **API 文檔**: 後端 API 端點說明
+
+## 🎯 最新更新
+
+### v2.1.0 - LLM 智能推薦 (2024年1月)
+- ✨ **新增 LLM 智能推薦標記**：GPT-4o 分析搜索結果，自動標記最符合用戶需求的商品
+- 🎨 **推薦徽章設計**：金色 "⭐ AI 最推薦" 標記，頂部中央顯示不遮擋內容
+- 💡 **推薦理由提示**：懸停顯示 AI 推薦原因，提升用戶體驗
+- 🔧 **視覺優化**：金邊框突出、閃爍動畫、響應式設計
+
+### v2.0.0 - AI 智能搜索 (2024年1月)
+- 🧠 **純語意向量搜索**：理解自然語言查詢意圖
+- 🤖 **智能搜索分支**：純類別、語意搜索、智能篩選
+- 🎯 **精確匹配**：點擊搜索建議功能
+
+---
+
+**最新版本**: v2.1.0  
+**最後更新**: 2024年1月
