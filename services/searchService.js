@@ -148,7 +148,7 @@ class SearchService {
           ]
         };
       } else {
-        // 多個關鍵字：每個關鍵字都必須在某個字段中匹配（AND 邏輯）
+        // 多個關鍵字：每個關鍵字都必須在任意字段中匹配（AND 邏輯，但允許跨字段）
         const keywordConditions = keywords.map(keyword => ({
           $or: [
             { name: { $regex: keyword, $options: 'i' } },
@@ -159,14 +159,18 @@ class SearchService {
           ]
         }));
         
+        console.log(`🔍 多關鍵字搜索條件: ${keywords.length} 個關鍵字`);
+        
         searchConditions = {
           $and: [
             { available: true },
-            ...keywordConditions,  // 所有關鍵字都必須匹配
+            ...keywordConditions,  // 所有關鍵字都必須匹配（但可以在不同字段）
             ...Object.entries(filters).map(([key, value]) => ({ [key]: value }))
           ]
         };
       }
+      
+      console.log(`🔍 執行查詢條件:`, JSON.stringify(searchConditions, null, 2));
       
       const results = await database.collection('products')
         .find(searchConditions)
@@ -191,6 +195,9 @@ class SearchService {
       }));
       
       console.log(`🔎 關鍵字搜索找到 ${results.length} 個結果`);
+      if (results.length > 0) {
+        console.log(`📝 結果樣本:`, results.map(r => ({ id: r.id, name: r.name })));
+      }
       return resultsWithScore;
       
     } catch (error) {
