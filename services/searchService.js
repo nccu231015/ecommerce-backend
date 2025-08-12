@@ -131,7 +131,7 @@ class SearchService {
         },
         {
           $match: {
-            similarity_score: { $gte: 0.85 }        // 調整相似度閾值，平衡精準度和召回率
+            similarity_score: { $gte: 0.9 }         // 保持高相似度閾值，確保精準性
           }
         }
       ];
@@ -382,6 +382,152 @@ class SearchService {
     }
   }
 
+  // 預篩選商品 - 基於 LLM 提取的條件先篩選商品集合
+  async preFilterProducts(database, filters = {}) {
+    try {
+      const productsCollection = database.collection('products');
+      
+      // 構建基礎篩選條件
+      const filterConditions = {
+        available: { $eq: true }
+      };
+      
+      // 處理類別篩選
+      if (filters.category) {
+        filterConditions.category = { $eq: filters.category };
+      }
+      
+      // 處理標籤篩選
+      if (filters.categories && Array.isArray(filters.categories)) {
+        filterConditions.categories = { $in: filters.categories };
+      }
+      
+      // 處理價格篩選
+      if (filters.minPrice || filters.maxPrice) {
+        const priceConditions = [];
+        
+        if (filters.minPrice) {
+          priceConditions.push({
+            $gte: [{ $toInt: "$new_price" }, parseInt(filters.minPrice)]
+          });
+        }
+        
+        if (filters.maxPrice) {
+          priceConditions.push({
+            $lte: [{ $toInt: "$new_price" }, parseInt(filters.maxPrice)]
+          });
+        }
+        
+        // 使用 aggregation pipeline 處理價格篩選
+        const pipeline = [
+          { $match: filterConditions },
+          {
+            $match: {
+              $expr: priceConditions.length === 1 ? priceConditions[0] : { $and: priceConditions }
+            }
+          },
+          {
+            $project: {
+              _id: 1,
+              id: 1,
+              name: 1,
+              image: 1,
+              category: 1,
+              new_price: 1,
+              old_price: 1,
+              description: 1,
+              categories: 1,
+              tags: 1,
+              product_embedding: 1
+            }
+          }
+        ];
+        
+        console.log(`🔍 預篩選管道:`, JSON.stringify(pipeline, null, 2));
+        return await productsCollection.aggregate(pipeline).toArray();
+      } else {
+        // 沒有價格篩選，直接查詢
+        return await productsCollection.find(filterConditions).toArray();
+      }
+      
+    } catch (error) {
+      console.error('❌ 預篩選失敗:', error.message);
+      return [];
+    }
+  }
+
+  // 在預篩選商品中執行向量搜索
+  async vectorSearchInPreFiltered(database, queryVector, limit, preFilteredProducts) {
+    try {
+      // 提取所有預篩選商品的 ID
+      const productIds = preFilteredProducts.map(p => p._id);
+      
+      const productsCollection = database.collection('products');
+      const pipeline = [
+        {
+          $match: {
+            _id: { $in: productIds }  // 只在預篩選的商品中搜索
+          }
+        },
+        {
+          $vectorSearch: {
+            index: "vector_index",
+            path: "product_embedding",
+            queryVector: queryVector,
+            numCandidates: Math.max(productIds.length, 50), // 候選數量不能超過預篩選商品數
+            limit: Math.max(limit * 2, 10)
+          }
+        },
+        {
+          $addFields: {
+            search_type: "semantic",
+            similarity_score: { $meta: "vectorSearchScore" }
+          }
+        },
+        {
+          $project: {
+            id: 1,
+            name: 1,
+            image: 1,
+            category: 1,
+            new_price: 1,
+            old_price: 1,
+            description: 1,
+            categories: 1,
+            tags: 1,
+            search_type: 1,
+            similarity_score: 1
+          }
+        },
+        {
+          $match: {
+            similarity_score: { $gte: 0.9 }
+          }
+        },
+        {
+          $sort: {
+            similarity_score: -1
+          }
+        },
+        {
+          $limit: limit
+        }
+      ];
+      
+      console.log(`🔍 預篩選向量搜索: 在 ${productIds.length} 個商品中搜索`);
+      
+      const results = await productsCollection.aggregate(pipeline).toArray();
+      
+      console.log(`✅ 預篩選向量搜索完成: ${results.length} 個結果`);
+      
+      return results;
+      
+    } catch (error) {
+      console.error('❌ 預篩選向量搜索失敗:', error.message);
+      return [];
+    }
+  }
+
   // 手動解析查詢（臨時修復，繞過 LLM 優化問題）
   parseQueryManually(query) {
     const filters = {};
@@ -426,47 +572,68 @@ class SearchService {
     return filters;
   }
 
-  // 純語意向量搜索 - 按照 MongoDB Atlas 官方標準實現
+  // 純語意向量搜索 - LLM 先篩選，再做語意搜索
   async vectorOnlySearch(database, query, limit, filters = {}) {
-    console.log(`🧠 開始純語意向量搜索: "${query}"`);
+    console.log(`🧠 開始智能搜索流程: "${query}"`);
     
     try {
-      // 🤖 第一步：LLM 優化查詢
+      // 🤖 第一步：LLM 分析和預篩選
+      console.log(`🔍 步驟1: LLM 分析查詢意圖`);
       const optimization = await this.optimizeSearchQuery(query);
       const optimizedQuery = optimization.keywords;
       const llmFilters = optimization.filters;
       
       // 合併 LLM 篩選條件和用戶篩選條件
       const combinedFilters = { ...filters, ...llmFilters };
-      console.log(`🔍 合併篩選條件:`, combinedFilters);
+      console.log(`📋 LLM 解析結果: 關鍵詞="${optimizedQuery}", 篩選條件=`, combinedFilters);
       
-      // 生成查詢向量（使用優化後的查詢）
+      // 🔍 第二步：基於 LLM 篩選條件預篩選商品集合
+      console.log(`🔍 步驟2: 基於條件預篩選商品`);
+      const preFilteredProducts = await this.preFilterProducts(database, combinedFilters);
+      
+      if (preFilteredProducts.length === 0) {
+        console.log(`⚠️ 預篩選後沒有符合條件的商品`);
+        return {
+          results: [],
+          breakdown: {
+            pre_filtered: 0,
+            vector_results: 0,
+            total_results: 0,
+            search_method: "llm_pre_filter + vector_search"
+          }
+        };
+      }
+      
+      console.log(`✅ 預篩選完成: ${preFilteredProducts.length} 個候選商品`);
+      
+      // 🧠 第三步：在預篩選的商品中進行語意向量搜索
+      console.log(`🔍 步驟3: 在候選商品中執行語意搜索`);
       const queryVector = await this.generateQueryVector(optimizedQuery);
       if (!queryVector) {
         console.log(`❌ 向量生成失敗`);
         return {
           results: [],
           breakdown: {
+            pre_filtered: preFilteredProducts.length,
             vector_results: 0,
             total_results: 0,
-            search_method: "pure_vector_search"
+            search_method: "llm_pre_filter + vector_search"
           }
         };
       }
       
       console.log(`🔍 執行語意向量搜索，向量維度: ${queryVector.length}`);
       
-      // 執行向量搜索（使用合併後的篩選條件）
-      const vectorResults = await this.vectorSearch(database, queryVector, limit, combinedFilters);
+      // 在預篩選的商品中執行向量搜索
+      const vectorResults = await this.vectorSearchInPreFiltered(database, queryVector, limit, preFilteredProducts);
       
-      console.log(`✅ 向量搜索完成，找到 ${vectorResults.length} 個結果`);
+      console.log(`✅ 智能搜索完成，找到 ${vectorResults.length} 個結果`);
       
       // 按相似度排序，保留原始相似度分數
       const finalResults = vectorResults
         .map(item => ({
           ...item,
           search_type: 'semantic'
-          // 保留原始 similarity_score，不進行調整
         }))
         .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
         .slice(0, limit);
@@ -482,20 +649,22 @@ class SearchService {
       return {
         results: finalResults,
         breakdown: {
+          pre_filtered: preFilteredProducts.length,
           vector_results: vectorResults.length,
           total_results: finalResults.length,
-          search_method: "pure_vector_search"
+          search_method: "llm_pre_filter + vector_search"
         }
       };
       
     } catch (error) {
-      console.error(`❌ 向量搜索失敗:`, error);
+      console.error(`❌ 智能搜索失敗:`, error);
       return {
         results: [],
         breakdown: {
+          pre_filtered: 0,
           vector_results: 0,
           total_results: 0,
-          search_method: "pure_vector_search",
+          search_method: "llm_pre_filter + vector_search",
           error: error.message
         }
       };
