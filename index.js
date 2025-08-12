@@ -9,7 +9,7 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const cloudinary = require('cloudinary').v2;
-const searchService = require('../services/searchService');
+const searchService = require('./services/searchService');
 
 app.use(express.json());
 app.use(cors());
