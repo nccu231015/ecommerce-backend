@@ -465,17 +465,16 @@ class SearchService {
       const productsCollection = database.collection('products');
       const pipeline = [
         {
-          $match: {
-            _id: { $in: productIds }  // 只在預篩選的商品中搜索
-          }
-        },
-        {
           $vectorSearch: {
             index: "vector_index",
             path: "product_embedding",
             queryVector: queryVector,
-            numCandidates: Math.max(productIds.length, 50), // 候選數量不能超過預篩選商品數
-            limit: Math.max(limit * 2, 10)
+            numCandidates: Math.max(productIds.length * 2, 100), // 增加候選數量
+            limit: Math.max(productIds.length, 20),              // 增加初始限制
+            filter: {
+              available: { $eq: true },
+              _id: { $in: productIds }  // 在 filter 中限制預篩選商品
+            }
           }
         },
         {
