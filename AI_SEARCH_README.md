@@ -73,6 +73,11 @@
    - 按相似度分數排序
    - 返回最終結果
 
+5. **LLM 智能推薦** ⭐
+   - 使用 GPT-4o 分析搜索結果
+   - 標記最符合用戶需求的商品
+   - 提供推薦理由和分析
+
 ## 📊 搜索方法對比
 
 | 搜索類型 | 優勢 | 使用場景 | 示例 |
@@ -119,6 +124,34 @@
    - 智能分支：純類別 vs 語義搜索
    - 整合 LLM 分析 + 預篩選 + 向量搜索
 
+8. **`addLLMRecommendation(originalQuery, searchResults)`** ⭐ **新增**
+   - 使用 GPT-4o 分析搜索結果
+   - 輸入：原始查詢 + 語意搜索結果列表
+   - 輸出：標記最推薦商品 + 推薦理由
+
+#### LLM 推薦分析流程：
+```javascript
+// 輸入資料結構
+const analysisInput = {
+  originalQuery: "黑色外套",  // 用戶原始搜索
+  searchResults: [
+    {
+      name: "商品名稱",
+      price: "2480", 
+      category: "women",
+      description: "商品描述...",
+      similarity_score: 0.925
+    }
+  ]
+};
+
+// GPT-4o 分析輸出
+const recommendation = {
+  recommended_index: 0,  // 推薦商品索引
+  reason: "推薦理由：顏色、款式、價格最符合需求"
+};
+```
+
 ## 🎯 API 端點
 
 ### 主要搜索 API
@@ -158,7 +191,7 @@ Content-Type: application/json
 }
 ```
 
-**語義搜索回應:**
+**語義搜索回應 (含 LLM 推薦):**
 ```json
 {
   "success": true,
@@ -169,7 +202,18 @@ Content-Type: application/json
       "price": "880",
       "category": "kid",
       "similarity_score": 0.925,
-      "search_type": "semantic"
+      "search_type": "semantic",
+      "llm_recommended": true,
+      "recommendation_reason": "顏色搭配豐富，適合兒童穿著，價格合理"
+    },
+    {
+      "id": "...",
+      "name": "其他商品",
+      "price": "1200",
+      "category": "kid",
+      "similarity_score": 0.890,
+      "search_type": "semantic",
+      "llm_recommended": false
     }
   ],
   "breakdown": {
@@ -283,6 +327,8 @@ const VECTOR_SEARCH_CONFIG = {
 - 載入狀態顯示
 - 響應式網格佈局 (4列)
 - 精確匹配點擊
+- ⭐ **LLM 推薦標記**：金色 "AI 推薦" 徽章
+- 🔍 **推薦分析彈窗**：點擊徽章查看 AI 分析理由
 
 ### 路由配置
 ```javascript
@@ -293,7 +339,7 @@ const VECTOR_SEARCH_CONFIG = {
 ### 導航整合
 ```javascript
 // Navbar.jsx
-<Link to="/search">🧠 AI 語意搜索</Link>
+<Link to="/search">AI Search</Link>
 ```
 
 ## 🚀 部署配置
@@ -403,9 +449,10 @@ curl -X POST "/ai-search" -d '{"query": "童裝", "limit": 5}'
 ### v2.1.0 - LLM 智能推薦 (2024年1月)
 - ✨ **新增 `addLLMRecommendation()` 函數**：GPT-4o 分析搜索結果
 - 🎯 **推薦標記邏輯**：自動標記最符合用戶需求的商品
-- 🎨 **前端推薦徽章**：金色 "⭐ AI 最推薦" 標記
-- 💡 **推薦理由提示**：懸停顯示 AI 推薦原因
-- 🔧 **視覺優化**：頂部中央顯示，不遮擋商品內容
+- 🎨 **前端推薦徽章**：金色 "⭐ AI 推薦" 標記
+- 🔍 **推薦分析彈窗**：點擊徽章查看完整 AI 分析
+- 🔧 **視覺優化**：右上角外側顯示，不影響商品排版
+- 🌐 **國際化**：導航更新為 "AI Search"
 
 ### v2.0.0 - 純語意向量搜索 (2024年1月)
 - 🧠 **純語意向量搜索**：移除混合搜索邏輯
