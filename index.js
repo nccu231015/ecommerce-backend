@@ -543,65 +543,6 @@ app.post("/ai-search", async (req, res) => {
     }
 });
 
-// 🔧 臨時調試端點：測試直接資料庫查詢
-app.post("/debug-search", async (req, res) => {
-    try {
-        const { query } = req.body;
-        const database = await connectToDatabase();
-        const productsCollection = database.collection('products');
-        
-        console.log(`🔧 調試搜索: "${query}"`);
-        
-        // 測試 1: 簡單查詢所有可用產品
-        const allAvailable = await productsCollection.find({ available: true }).limit(3).toArray();
-        console.log(`📊 可用產品數量: ${allAvailable.length}`);
-        
-        // 測試 2: 直接 tags 數組搜索
-        const tagResults = await productsCollection.find({
-            available: true,
-            tags: { $in: [query] }
-        }).limit(5).toArray();
-        console.log(`🏷️ Tags 精確匹配: ${tagResults.length}`);
-        
-        // 測試 3: 使用 $regex 搜索 tags
-        const regexResults = await productsCollection.find({
-            available: true,
-            tags: { $elemMatch: { $regex: query, $options: 'i' } }
-        }).limit(5).toArray();
-        console.log(`🔍 Tags Regex 匹配: ${regexResults.length}`);
-        
-        // 測試 4: 搜索產品名稱
-        const nameResults = await productsCollection.find({
-            available: true,
-            name: { $regex: query, $options: 'i' }
-        }).limit(5).toArray();
-        console.log(`📝 名稱匹配: ${nameResults.length}`);
-        
-        res.json({
-            success: true,
-            query: query,
-            tests: {
-                allAvailable: allAvailable.length,
-                tagExact: tagResults.length,
-                tagRegex: regexResults.length,
-                nameRegex: nameResults.length
-            },
-            sampleResults: {
-                allAvailable: allAvailable.map(p => ({ id: p.id, name: p.name, available: p.available })),
-                tagExact: tagResults.map(p => ({ id: p.id, name: p.name, tags: p.tags })),
-                tagRegex: regexResults.map(p => ({ id: p.id, name: p.name, tags: p.tags })),
-                nameRegex: nameResults.map(p => ({ id: p.id, name: p.name }))
-            }
-        });
-        
-    } catch (error) {
-        console.error("🔧 調試搜索失敗:", error.message);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
 
 // API for search suggestions
 app.post("/search-suggestions", async (req, res) => {

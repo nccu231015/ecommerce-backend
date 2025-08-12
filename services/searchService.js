@@ -150,7 +150,7 @@ class SearchService {
           category: 1,
           new_price: 1,
           old_price: 1,
-          description: { $substr: ["$description", 0, 100] },
+          description: 1,  // 移除不支持的 $substr，返回完整描述
           categories: 1,
           tags: 1
         })
