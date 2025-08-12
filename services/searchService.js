@@ -71,31 +71,9 @@ class SearchService {
         available: { $eq: true }
       };
       
-      // 處理價格篩選（資料庫中價格是字符串，需要轉換比較）
-      if (filters.minPrice || filters.maxPrice) {
-        const priceConditions = [];
-        
-        if (filters.minPrice) {
-          priceConditions.push({
-            $expr: { $gte: [{ $toInt: "$new_price" }, parseInt(filters.minPrice)] }
-          });
-        }
-        
-        if (filters.maxPrice) {
-          priceConditions.push({
-            $expr: { $lte: [{ $toInt: "$new_price" }, parseInt(filters.maxPrice)] }
-          });
-        }
-        
-        if (priceConditions.length > 0) {
-          filterConditions.$and = filterConditions.$and || [];
-          filterConditions.$and.push(...priceConditions);
-        }
-      }
-      
-      // 處理類別篩選
+      // 處理類別篩選（Vector Search 支援精確匹配）
       if (filters.category) {
-        filterConditions.category = { $regex: filters.category, $options: 'i' };
+        filterConditions.category = { $eq: filters.category };
       }
       
       // 處理標籤篩選
@@ -155,7 +133,36 @@ class SearchService {
           $match: {
             similarity_score: { $gte: 0.9 }         // 保持高相似度閾值，結合類別篩選確保精準性
           }
-        },
+        }
+      ];
+
+      // 處理價格篩選（在 aggregation pipeline 中進行，因為 Vector Search filter 不支援 $expr）
+      if (filters.minPrice || filters.maxPrice) {
+        const priceConditions = [];
+        
+        if (filters.minPrice) {
+          priceConditions.push({
+            $gte: [{ $toInt: "$new_price" }, parseInt(filters.minPrice)]
+          });
+        }
+        
+        if (filters.maxPrice) {
+          priceConditions.push({
+            $lte: [{ $toInt: "$new_price" }, parseInt(filters.maxPrice)]
+          });
+        }
+        
+        pipeline.push({
+          $match: {
+            $expr: priceConditions.length === 1 ? priceConditions[0] : { $and: priceConditions }
+          }
+        });
+        
+        console.log(`💰 添加價格篩選: minPrice=${filters.minPrice}, maxPrice=${filters.maxPrice}`);
+      }
+
+      // 排序和限制結果
+      pipeline.push(
         {
           $sort: {
             similarity_score: -1                     // 按相似度排序
@@ -164,7 +171,7 @@ class SearchService {
         {
           $limit: limit                             // 最終限制結果數量
         }
-      ];
+      );
       
       console.log(`🔍 執行向量搜索管道:`, JSON.stringify(pipeline[0], null, 2));
       
