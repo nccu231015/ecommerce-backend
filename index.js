@@ -573,6 +573,48 @@ app.post("/ai-search", async (req, res) => {
 });
 
 
+// API for exact product name match
+app.post("/exact-search", async (req, res) => {
+    try {
+        const { query } = req.body;
+        
+        if (!query || !query.trim()) {
+            return res.json({
+                success: true,
+                results: []
+            });
+        }
+
+        console.log(`🎯 精確匹配搜索: "${query}"`);
+        
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        // 精確匹配商品名稱
+        const exactMatch = await productsCollection.findOne({
+            name: query,
+            available: true
+        });
+        
+        const results = exactMatch ? [exactMatch] : [];
+        
+        console.log(`✅ 精確匹配結果: ${results.length} 個`);
+        
+        res.json({
+            success: true,
+            results: results,
+            breakdown: {
+                search_method: "exact_name_match",
+                total_results: results.length
+            }
+        });
+        
+    } catch (error) {
+        console.error("精確搜索錯誤:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // API for search suggestions
 app.post("/search-suggestions", async (req, res) => {
     try {
