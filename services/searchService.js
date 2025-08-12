@@ -83,9 +83,19 @@ class SearchService {
         filterConditions.new_price = priceFilter;
       }
       
-      // 添加其他篩選條件（排除價格相關）
+      // 處理類別篩選
+      if (filters.category) {
+        filterConditions.category = { $regex: filters.category, $options: 'i' };
+      }
+      
+      // 處理標籤篩選
+      if (filters.categories && Array.isArray(filters.categories)) {
+        filterConditions.categories = { $in: filters.categories };
+      }
+      
+      // 添加其他篩選條件（排除已處理的）
       Object.keys(filters).forEach(key => {
-        if (key !== 'minPrice' && key !== 'maxPrice') {
+        if (!['minPrice', 'maxPrice', 'category', 'categories'].includes(key)) {
           filterConditions[key] = filters[key];
         }
       });
@@ -133,7 +143,7 @@ class SearchService {
         },
         {
           $match: {
-            similarity_score: { $gte: 0.9 }         // 設置合理的相似度閾值，確保相關結果
+            similarity_score: { $gte: 0.9 }         // 保持高相似度閾值，結合類別篩選確保精準性
           }
         },
         {
@@ -270,7 +280,15 @@ class SearchService {
 
 請以JSON格式回應，包含：
 1. keywords: 適合向量搜索的關鍵詞
-2. filters: 篩選條件對象
+2. filters: 篩選條件對象，可包含：
+   - minPrice/maxPrice: 價格範圍
+   - category: 商品類別（如 "men", "women", "kids"）
+   - categories: 商品標籤數組
+
+商品類別對應：
+- 童裝/兒童/小孩 → "kids"
+- 男裝/男性 → "men"  
+- 女裝/女性 → "women"
 
 範例：
 輸入："我想找一件適合約會穿的黑色外套"
@@ -280,10 +298,13 @@ class SearchService {
 輸出：{"keywords": "運動服", "filters": {"maxPrice": 800}}
 
 輸入："我想要找童裝，價格1000以下的"
-輸出：{"keywords": "童裝 兒童", "filters": {"maxPrice": 1000}}
+輸出：{"keywords": "童裝 兒童", "filters": {"maxPrice": 1000, "category": "kids"}}
 
-輸入："給我推薦冬天保暖的衣服，預算500-800"
-輸出：{"keywords": "冬季保暖衣服", "filters": {"minPrice": 500, "maxPrice": 800}}
+輸入："我想要看童裝，價格1000~2000"
+輸出：{"keywords": "童裝 兒童", "filters": {"minPrice": 1000, "maxPrice": 2000, "category": "kids"}}
+
+輸入："給我推薦女生冬天保暖的衣服，預算500-800"
+輸出：{"keywords": "冬季保暖衣服", "filters": {"minPrice": 500, "maxPrice": 800, "category": "women"}}
 
 用戶查詢："${originalQuery}"
 請回應JSON：`;
