@@ -125,8 +125,9 @@ app.post("/upload", upload.single("product"), async (req, res) => {
                     folder: "ecommerce-products",
                     resource_type: "image",
                     transformation: [
-                        { width: 400, height: 400, crop: "fill" },
-                        { quality: "auto", format: "auto" }
+                        { width: 800, height: 800, crop: "fill", gravity: "center" }, // 統一尺寸，智能裁切
+                        { quality: "auto", format: "auto", fetch_format: "auto" },
+                        { dpr: "auto" } // 自動設備像素比
                     ]
                 },
                 (error, result) => {
