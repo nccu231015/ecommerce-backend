@@ -456,7 +456,7 @@ class SearchService {
     }
   }
 
-  // 判斷是否為純類別查詢
+  // 判斷是否為純類別查詢或純篩選查詢
   isPureCategoryQuery(originalQuery, llmFilters) {
     const queryLower = originalQuery.toLowerCase().trim();
     const pureCategoryTerms = ['女裝', '男裝', '童裝', '兒童', '小孩', '女生', '男生', '女性', '男性'];
@@ -465,37 +465,99 @@ class SearchService {
     const isPureCategory = pureCategoryTerms.some(term => queryLower === term) ||
                           (queryLower.length <= 4 && llmFilters.category && !llmFilters.minPrice && !llmFilters.maxPrice);
     
-    return isPureCategory;
+    // 檢查是否為純篩選查詢（只有價格條件，沒有具體商品描述）
+    const isPureFilter = this.isPureFilterQuery(originalQuery, llmFilters);
+    
+    return isPureCategory || isPureFilter;
   }
 
-  // 處理純類別搜索
-  async handlePureCategorySearch(database, filters, limit) {
+  // 判斷是否為純篩選查詢
+  isPureFilterQuery(originalQuery, llmFilters) {
+    const queryLower = originalQuery.toLowerCase().trim();
+    
+    // 檢查是否包含價格相關詞彙但沒有具體商品描述
+    const hasPriceTerms = /價格|以下|以上|便宜|貴/.test(queryLower);
+    const hasGenericTerms = /商品|東西|產品|物品/.test(queryLower);
+    const hasSpecificItems = /外套|上衣|褲子|鞋子|包包|帽子|裙子|襯衫/.test(queryLower);
+    
+    // 如果有價格條件，且只有泛泛的詞彙，沒有具體商品描述
+    const isPureFilter = (llmFilters.minPrice || llmFilters.maxPrice) && 
+                        (hasGenericTerms || hasPriceTerms) && 
+                        !hasSpecificItems &&
+                        !llmFilters.category;
+    
+    console.log(`🔍 純篩選查詢檢查: hasPriceTerms=${hasPriceTerms}, hasGenericTerms=${hasGenericTerms}, hasSpecificItems=${hasSpecificItems}, isPureFilter=${isPureFilter}`);
+    
+    return isPureFilter;
+  }
+
+  // 處理直接搜索（純類別或純篩選）
+  async handleDirectSearch(database, filters, limit) {
     try {
       const productsCollection = database.collection('products');
       
+      // 基礎篩選條件
       const filterConditions = {
         available: { $eq: true }
       };
       
+      // 處理類別篩選
       if (filters.category) {
         filterConditions.category = { $eq: filters.category };
       }
       
-      console.log(`🏷️ 純類別搜索條件:`, filterConditions);
+      console.log(`🏷️ 直接搜索條件:`, filterConditions);
       
-      const results = await productsCollection
-        .find(filterConditions)
-        .limit(limit)
-        .toArray();
+      let results;
+      
+      // 如果有價格篩選，使用 aggregation pipeline
+      if (filters.minPrice || filters.maxPrice) {
+        const pipeline = [
+          { $match: filterConditions }
+        ];
+        
+        // 添加價格篩選
+        const priceConditions = [];
+        if (filters.minPrice) {
+          priceConditions.push({
+            $gte: [{ $toInt: "$new_price" }, parseInt(filters.minPrice)]
+          });
+        }
+        if (filters.maxPrice) {
+          priceConditions.push({
+            $lte: [{ $toInt: "$new_price" }, parseInt(filters.maxPrice)]
+          });
+        }
+        
+        pipeline.push({
+          $match: {
+            $expr: priceConditions.length === 1 ? priceConditions[0] : { $and: priceConditions }
+          }
+        });
+        
+        pipeline.push({ $limit: limit });
+        
+        console.log(`💰 使用價格篩選 pipeline`);
+        results = await productsCollection.aggregate(pipeline).toArray();
+      } else {
+        // 沒有價格篩選，直接查詢
+        results = await productsCollection
+          .find(filterConditions)
+          .limit(limit)
+          .toArray();
+      }
       
       // 為結果添加搜索元數據
+      const searchType = filters.category ? 'category' : 'filter';
+      const searchMethod = filters.category ? 'pure_category_search' : 'pure_filter_search';
+      
       const formattedResults = results.map(item => ({
         ...item,
-        search_type: 'category',
-        similarity_score: 1.0  // 類別匹配給予滿分
+        search_type: searchType,
+        similarity_score: 1.0  // 直接匹配給予滿分
       }));
       
-      console.log(`✅ 純類別搜索完成: ${formattedResults.length} 個結果`);
+      console.log(`✅ 直接搜索完成: ${formattedResults.length} 個結果`);
       
       return {
         results: formattedResults,
@@ -503,19 +565,19 @@ class SearchService {
           pre_filtered: formattedResults.length,
           vector_results: 0,
           total_results: formattedResults.length,
-          search_method: "pure_category_search"
+          search_method: searchMethod
         }
       };
       
     } catch (error) {
-      console.error('❌ 純類別搜索失敗:', error.message);
+      console.error('❌ 直接搜索失敗:', error.message);
       return {
         results: [],
         breakdown: {
           pre_filtered: 0,
           vector_results: 0,
           total_results: 0,
-          search_method: "pure_category_search",
+          search_method: "direct_search",
           error: error.message
         }
       };
@@ -577,11 +639,11 @@ class SearchService {
       const optimizedQuery = optimization.keywords;
       const llmFilters = optimization.filters;
       
-      // 🎯 特殊處理：純類別查詢
+      // 🎯 特殊處理：純類別查詢或純篩選查詢
       const isPureCategoryQuery = this.isPureCategoryQuery(query, llmFilters);
       if (isPureCategoryQuery) {
-        console.log(`🏷️ 檢測到純類別查詢，跳過向量搜索`);
-        return await this.handlePureCategorySearch(database, llmFilters, limit);
+        console.log(`🏷️ 檢測到純類別/篩選查詢，跳過向量搜索`);
+        return await this.handleDirectSearch(database, llmFilters, limit);
       }
       
       // 合併 LLM 篩選條件和用戶篩選條件
