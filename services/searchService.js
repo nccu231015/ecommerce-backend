@@ -268,12 +268,12 @@ class SearchService {
       
       console.log(`✅ 向量搜索完成，找到 ${vectorResults.length} 個結果`);
       
-      // 按相似度排序並調整信心度
+      // 按相似度排序，保留原始相似度分數
       const finalResults = vectorResults
         .map(item => ({
           ...item,
-          search_type: 'semantic',
-          similarity_score: this.adjustConfidenceScore(item.similarity_score || 0.4, 'semantic')
+          search_type: 'semantic'
+          // 保留原始 similarity_score，不進行調整
         }))
         .sort((a, b) => (b.similarity_score || 0) - (a.similarity_score || 0))
         .slice(0, limit);
