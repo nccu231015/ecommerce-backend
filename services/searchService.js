@@ -46,13 +46,13 @@ class SearchService {
     const contextKeywords = ['約會', '上班', '休閒', '運動', '派對', '聚會', '通勤'];
     const hasContext = contextKeywords.some(keyword => queryLower.includes(keyword));
     
-    // 動態權重分配
+    // 動態權重分配 - 提高向量搜索比重
     if (hasBrand || hasPrice || hasColor) {
-      return { vector: 0.4, keyword: 0.6 }; // 精確匹配優先
+      return { vector: 0.6, keyword: 0.4 }; // 精確匹配時仍優先語義理解
     } else if (hasContext) {
-      return { vector: 0.8, keyword: 0.2 }; // 語義理解優先
+      return { vector: 0.85, keyword: 0.15 }; // 情境查詢強化語義理解
     } else {
-      return { vector: 0.7, keyword: 0.3 }; // 默認平衡
+      return { vector: 0.8, keyword: 0.2 }; // 默認以語義為主
     }
   }
   
