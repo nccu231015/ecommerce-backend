@@ -59,22 +59,30 @@ class SearchService {
   // 向量搜索 - 按照 MongoDB Atlas 官方規範實現
   async vectorSearch(database, queryVector, limit, filters = {}) {
     try {
+      console.log(`🧠 開始向量搜索，查詢向量維度: ${queryVector?.length || 'undefined'}`);
+      
+      if (!queryVector || !Array.isArray(queryVector)) {
+        console.error('❌ 查詢向量無效');
+        return [];
+      }
+      
       const filterConditions = {
         available: { $eq: true },
         ...filters
       };
       
+      console.log(`🔍 向量搜索過濾條件:`, filterConditions);
+      
       // 使用官方推薦的 $vectorSearch 聚合管道
-      const results = await database.collection('products').aggregate([
+      const pipeline = [
         {
           $vectorSearch: {
-            index: "product_search_index",           // 索引名稱
+            index: "vector_index",                   // 索引名稱
             path: "product_embedding",               // 向量字段路徑
             queryVector: queryVector,                // 查詢向量
-            numCandidates: Math.max(limit * 10, 150), // 增加候選數量以提高準確性
-            limit: limit,
-            filter: filterConditions,
-            exact: false                             // 使用 ANN (近似最近鄰) 搜索
+            numCandidates: Math.max(limit * 20, 200), // 增加候選數量以提高召回率
+            limit: Math.max(limit * 2, 10),         // 增加初始限制
+            filter: filterConditions
           }
         },
         {
@@ -106,17 +114,37 @@ class SearchService {
         },
         {
           $match: {
-            similarity_score: { $gte: 0.3 }         // 提高相似度閾值，過濾低質量結果
+            similarity_score: { $gte: 0.1 }         // 降低相似度閾值，增加召回率
           }
+        },
+        {
+          $sort: {
+            similarity_score: -1                     // 按相似度排序
+          }
+        },
+        {
+          $limit: limit                             // 最終限制結果數量
         }
-      ]).toArray();
+      ];
+      
+      console.log(`🔍 執行向量搜索管道:`, JSON.stringify(pipeline[0], null, 2));
+      
+      const results = await database.collection('products').aggregate(pipeline).toArray();
       
       console.log(`🔍 語義向量搜索找到 ${results.length} 個結果`);
+      if (results.length > 0) {
+        console.log(`📊 相似度分數範圍: ${Math.min(...results.map(r => r.similarity_score)).toFixed(3)} - ${Math.max(...results.map(r => r.similarity_score)).toFixed(3)}`);
+        console.log(`📝 結果樣本:`, results.slice(0, 2).map(r => ({ 
+          name: r.name, 
+          score: r.similarity_score?.toFixed(3) 
+        })));
+      }
+      
       return results;
       
     } catch (error) {
       console.error('❌ 向量搜索失敗:', error.message);
-      console.error('可能原因：向量索引未創建或配置錯誤');
+      console.error('❌ 錯誤詳情:', error);
       return [];
     }
   }
@@ -197,6 +225,8 @@ class SearchService {
       console.log(`🔎 關鍵字搜索找到 ${results.length} 個結果`);
       if (results.length > 0) {
         console.log(`📝 結果樣本:`, results.map(r => ({ id: r.id, name: r.name })));
+      } else {
+        console.log(`⚠️ 關鍵字搜索無結果，檢查查詢條件`);
       }
       return resultsWithScore;
       
@@ -303,15 +333,12 @@ class SearchService {
   
   // RAG 增強：結果合併和評分 - 調整信心度計算
   enhanceSearchResults(vectorResults, keywordResults, weights, originalQuery) {
-    console.log(`🔧 開始增強結果 - 語義: ${vectorResults.length}, 關鍵字: ${keywordResults.length}`);
     const allResults = [];
     
     // 處理語義搜索結果
     vectorResults.forEach(item => {
-      // 調整語義搜索的信心度計算
       const adjustedScore = this.adjustConfidenceScore(item.similarity_score || 0.4, 'semantic');
       const finalScore = adjustedScore * weights.vector;
-      console.log(`🧠 語義結果: ${item.name} (分數: ${finalScore.toFixed(3)})`);
       allResults.push({
         ...item,
         final_score: finalScore,
@@ -331,12 +358,10 @@ class SearchService {
         allResults[existingIndex].final_score += additionalScore;
         allResults[existingIndex].search_type = 'hybrid';
         allResults[existingIndex].relevance_reason = '語義+關鍵字雙重匹配';
-        console.log(`🔀 混合結果: ${item.name} (總分數: ${allResults[existingIndex].final_score.toFixed(3)})`);
       } else {
         // 新結果
         const adjustedScore = this.adjustConfidenceScore(item.similarity_score || 0.3, 'keyword');
         const finalScore = adjustedScore * weights.keyword;
-        console.log(`🔍 關鍵字結果: ${item.name} (分數: ${finalScore.toFixed(3)})`);
         allResults.push({
           ...item,
           final_score: finalScore,
@@ -347,7 +372,7 @@ class SearchService {
       }
     });
     
-    console.log(`🔧 增強完成，總結果數: ${allResults.length}`);
+    console.log(`🔧 結果合併完成: 語義 ${vectorResults.length} + 關鍵字 ${keywordResults.length} = 總計 ${allResults.length}`);
     return allResults;
   }
   
