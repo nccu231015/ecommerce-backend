@@ -26,16 +26,23 @@ class SearchService {
     }
   }
 
-  // MongoDB Atlas 混合搜索 - 官方 $rankFusion 實現
+  // MongoDB Atlas 混合搜索 - 語義增強 (Semantic Boosting) 實現
   async hybridSearch(database, query, limit = 10, filters = {}) {
     try {
-      console.log(`🔄 開始混合搜索 (官方 $rankFusion): "${query}"`);
+      console.log(`🔄 開始混合搜索 (語義增強): "${query}"`);
       
       // 1. 生成查詢向量
       const queryVector = await this.generateQueryVector(query);
       if (!queryVector) {
         console.log('❌ 向量生成失敗，降級到全文搜索');
-        return await this.textOnlySearch(database, query, limit, filters);
+        const fallbackResults = await this.textOnlySearch(database, query, limit, filters);
+        return {
+          results: fallbackResults,
+          breakdown: {
+            search_method: "text_only_search",
+            total_results: fallbackResults.length
+          }
+        };
       }
 
       // 2. 構建篩選條件
@@ -51,57 +58,83 @@ class SearchService {
       const weights = this.getOptimalWeights(query, filters);
       console.log(`⚖️ 搜索權重 - 向量: ${weights.vectorPipeline}, 全文: ${weights.fullTextPipeline}`);
 
-      // 4. 使用官方 $rankFusion 聚合階段執行混合搜索
-      const results = await database.collection('products').aggregate([
+      // 4. 步驟一：執行向量搜索獲取語義相似的文檔
+      const vectorCutoff = 0.75; // 相似度閾值
+      const vectorWeight = weights.vectorPipeline;
+      const numCandidates = Math.max(limit * 10, 100);
+
+      const vectorResults = await database.collection('products').aggregate([
         {
-          $rankFusion: {
-            input: {
-              pipelines: {
-                vectorPipeline: [
-                  {
-                    $vectorSearch: {
-                      index: "vector_index",
-                      path: "product_embedding",
-                      queryVector: queryVector,
-                      numCandidates: Math.max(limit * 10, 100),
-                      limit: limit,
-                      filter: filterConditions
-                    }
+          $vectorSearch: {
+            index: "vector_index",
+            path: "product_embedding",
+            queryVector: queryVector,
+            numCandidates: numCandidates,
+            limit: Math.max(limit * 2, 20),
+            filter: filterConditions
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            id: 1,
+            name: 1,
+            image: 1,
+            category: 1,
+            new_price: 1,
+            old_price: 1,
+            description: 1,
+            available: 1,
+            vectorScore: { $meta: "searchScore" }
+          }
+        },
+        {
+          $match: {
+            vectorScore: { $gte: vectorCutoff }
+          }
+        }
+      ]).toArray();
+
+      console.log(`🔍 向量搜索找到 ${vectorResults.length} 個語義相似結果 (閾值: ${vectorCutoff})`);
+
+      // 5. 創建向量搜索結果的 ID 映射和加權分數
+      const vectorScoresMap = {};
+      vectorResults.forEach(result => {
+        vectorScoresMap[result._id.toString()] = result.vectorScore * vectorWeight;
+      });
+
+      // 6. 步驟二：執行語義增強的全文搜索
+      const boostConditions = Object.keys(vectorScoresMap).map(id => ({
+        equals: {
+          path: "_id",
+          value: { $oid: id },
+          score: { boost: { value: vectorScoresMap[id] } }
+        }
+      }));
+
+      const hybridResults = await database.collection('products').aggregate([
+        {
+          $search: {
+            index: "product_text_search",
+            compound: {
+              should: [
+                // 主要全文搜索
+                {
+                  text: {
+                    query: query,
+                    path: "name"
                   }
-                ],
-                fullTextPipeline: [
-                  {
-                    $search: {
-                      index: "product_text_search",
-                      compound: {
-                        must: [
-                          {
-                            text: {
-                              query: query,
-                              path: "name"
-                            }
-                          }
-                        ],
-                        filter: Object.keys(filterConditions).map(key => ({
-                          equals: {
-                            path: key,
-                            value: filterConditions[key].$eq
-                          }
-                        }))
-                      }
-                    }
-                  },
-                  { $limit: limit }
-                ]
-              }
-            },
-            combination: {
-              weights: {
-                vectorPipeline: weights.vectorPipeline,
-                fullTextPipeline: weights.fullTextPipeline
-              }
-            },
-            scoreDetails: true
+                },
+                // 語義增強：提升向量搜索匹配的文檔分數
+                ...boostConditions
+              ],
+              filter: Object.keys(filterConditions).map(key => ({
+                equals: {
+                  path: key,
+                  value: filterConditions[key].$eq
+                }
+              }))
+            }
           }
         },
         {
@@ -122,30 +155,33 @@ class SearchService {
         { $limit: limit }
       ]).toArray();
 
-      console.log(`✅ 官方 RRF 混合搜索完成 - 找到 ${results.length} 個結果`);
+      console.log(`✅ 語義增強混合搜索完成 - 找到 ${hybridResults.length} 個結果`);
       
-      if (results.length === 0) {
+      if (hybridResults.length === 0) {
         console.log('🔄 混合搜索無結果，嘗試向量搜索...');
         const fallbackResults = await this.vectorOnlySearch(database, queryVector, limit, filters);
         return {
           results: fallbackResults,
           breakdown: {
             search_method: "vector_only_search",
-            total_results: fallbackResults.length
+            total_results: fallbackResults.length,
+            vector_matches: vectorResults.length
           }
         };
       }
 
       return {
-        results: results,
+        results: hybridResults,
         breakdown: {
-          search_method: "hybrid_search_rankfusion",
-          total_results: results.length
+          search_method: "hybrid_search_semantic_boosting",
+          total_results: hybridResults.length,
+          vector_matches: vectorResults.length,
+          boost_applied: boostConditions.length
         }
       };
 
     } catch (error) {
-      console.error('❌ 官方 RRF 混合搜索失敗:', error.message);
+      console.error('❌ 語義增強混合搜索失敗:', error.message);
       console.error('❌ 錯誤堆疊:', error.stack);
       
       // 智能降級策略
