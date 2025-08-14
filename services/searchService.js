@@ -26,7 +26,7 @@ class SearchService {
     }
   }
 
-  // MongoDB Atlas 混合搜索 - 結合向量搜索和全文搜索
+  // MongoDB Atlas 混合搜索 - 手動融合向量搜索和全文搜索 (適用於 8.0.12)
   async hybridSearch(database, query, limit = 10, filters = {}) {
     try {
       console.log(`🔄 開始混合搜索: "${query}"`);
@@ -51,71 +51,117 @@ class SearchService {
       const weights = this.getOptimalWeights(query, filters);
       console.log(`⚖️ 搜索權重 - 向量: ${weights.vectorPipeline}, 全文: ${weights.textPipeline}`);
 
-      // 4. 執行混合搜索
+      // 4. 執行手動融合混合搜索 (適用於 MongoDB 8.0.12)
       const results = await database.collection('products').aggregate([
+        // 第一階段：向量搜索
         {
-          $rankFusion: {
-            input: {
-              pipelines: {
-                // 向量搜索管道
-                vectorPipeline: [
-                  {
-                    $vectorSearch: {
-                      index: "vector_index",
-                      path: "product_embedding",
-                      queryVector: queryVector,
-                      numCandidates: Math.max(limit * 10, 100),
-                      limit: Math.max(limit * 2, 20),
-                      filter: filterConditions
-                    }
-                  }
-                ],
-                // 全文搜索管道
-                textPipeline: [
-                  {
-                    $search: {
-                      index: "product_text_search",
-                      compound: {
-                        should: [
-                          {
-                            text: {
-                              query: query,
-                              path: ["name", "description"],
-                              score: { boost: { value: 2.0 } }
-                            }
-                          },
-                          {
-                            text: {
-                              query: query,
-                              path: "tags",
-                              score: { boost: { value: 1.5 } }
-                            }
-                          }
-                        ],
-                        filter: Object.keys(filterConditions).map(key => ({
-                          equals: {
-                            path: key,
-                            value: filterConditions[key].$eq
-                          }
-                        }))
-                      }
-                    }
-                  },
-                  { $limit: Math.max(limit * 2, 20) }
-                ]
-              }
-            },
-            combination: {
-              weights: weights
-            }
+          $vectorSearch: {
+            index: "vector_index",
+            path: "product_embedding",
+            queryVector: queryVector,
+            numCandidates: Math.max(limit * 10, 100),
+            limit: Math.max(limit * 2, 20),
+            filter: filterConditions
           }
         },
         {
           $addFields: {
-            search_type: "hybrid",
-            similarity_score: { $meta: "searchScore" }
+            vectorRank: { $meta: "searchScore" },
+            searchSource: "vector"
           }
         },
+        // 第二階段：使用 $unionWith 合併全文搜索結果
+        {
+          $unionWith: {
+            coll: "products",
+            pipeline: [
+              {
+                $search: {
+                  index: "product_text_search",
+                  compound: {
+                    should: [
+                      {
+                        text: {
+                          query: query,
+                          path: ["name", "description"],
+                          score: { boost: { value: 2.0 } }
+                        }
+                      },
+                      {
+                        text: {
+                          query: query,
+                          path: "tags",
+                          score: { boost: { value: 1.5 } }
+                        }
+                      }
+                    ],
+                    filter: Object.keys(filterConditions).map(key => ({
+                      equals: {
+                        path: key,
+                        value: filterConditions[key].$eq
+                      }
+                    }))
+                  }
+                }
+              },
+              {
+                $addFields: {
+                  textRank: { $meta: "searchScore" },
+                  searchSource: "text"
+                }
+              },
+              { $limit: Math.max(limit * 2, 20) }
+            ]
+          }
+        },
+        // 第三階段：按 _id 分組，合併重複結果
+        {
+          $group: {
+            _id: "$_id",
+            id: { $first: "$id" },
+            name: { $first: "$name" },
+            image: { $first: "$image" },
+            category: { $first: "$category" },
+            new_price: { $first: "$new_price" },
+            old_price: { $first: "$old_price" },
+            description: { $first: "$description" },
+            available: { $first: "$available" },
+            vectorRank: { $max: "$vectorRank" },
+            textRank: { $max: "$textRank" },
+            searchSources: { $addToSet: "$searchSource" }
+          }
+        },
+        // 第四階段：計算融合分數
+        {
+          $addFields: {
+            combinedScore: {
+              $add: [
+                { 
+                  $multiply: [
+                    weights.vectorPipeline, 
+                    { $ifNull: ["$vectorRank", 0] }
+                  ]
+                },
+                { 
+                  $multiply: [
+                    weights.textPipeline, 
+                    { $ifNull: ["$textRank", 0] }
+                  ]
+                }
+              ]
+            },
+            search_type: "hybrid_manual",
+            similarity_score: {
+              $cond: {
+                if: { $gt: [{ $ifNull: ["$vectorRank", 0] }, 0] },
+                then: "$vectorRank",
+                else: "$textRank"
+              }
+            }
+          }
+        },
+        // 第五階段：排序和限制結果
+        { $sort: { combinedScore: -1 } },
         {
           $project: {
             _id: 1,
@@ -140,7 +186,7 @@ class SearchService {
         results: results,
         breakdown: {
           total_results: results.length,
-          search_method: "hybrid_search_rankfusion",
+          search_method: "hybrid_search_manual_fusion",
           weights_used: weights
         }
       };
@@ -148,8 +194,67 @@ class SearchService {
     } catch (error) {
       console.error('❌ 混合搜索失敗:', error.message);
       
-      // 降級到純全文搜索
-      console.log('🔄 降級到純全文搜索');
+      // 降級到純向量搜索
+      console.log('🔄 降級到純向量搜索');
+      return await this.vectorOnlySearch(database, query, limit, filters);
+    }
+  }
+
+  // 純向量搜索 - 作為備用方案
+  async vectorOnlySearch(database, query, limit = 10, filters = {}) {
+    try {
+      console.log(`🔄 執行純向量搜索: "${query}"`);
+      
+      const queryVector = await this.generateQueryVector(query);
+      if (!queryVector) {
+        console.log('❌ 向量生成失敗，降級到全文搜索');
+        return await this.textOnlySearch(database, query, limit, filters);
+      }
+
+      const filterConditions = { available: { $eq: true } };
+      if (filters.category) {
+        filterConditions.category = { $eq: filters.category };
+      }
+
+      const results = await database.collection('products').aggregate([
+        {
+          $vectorSearch: {
+            index: "vector_index",
+            path: "product_embedding",
+            queryVector: queryVector,
+            numCandidates: Math.max(limit * 10, 100),
+            limit: limit,
+            filter: filterConditions
+          }
+        },
+        {
+          $addFields: {
+            search_type: "vector_only",
+            similarity_score: { $meta: "searchScore" }
+          }
+        },
+        {
+          $project: {
+            _id: 1, id: 1, name: 1, image: 1, category: 1,
+            new_price: 1, old_price: 1, description: 1, available: 1,
+            search_type: 1, similarity_score: 1
+          }
+        }
+      ]).toArray();
+
+      console.log(`✅ 純向量搜索完成 - 找到 ${results.length} 個結果`);
+      
+      return {
+        results: results,
+        breakdown: {
+          total_results: results.length,
+          search_method: "vector_only_search"
+        }
+      };
+
+    } catch (error) {
+      console.error('❌ 純向量搜索失敗:', error.message);
+      console.log('🔄 最終降級到全文搜索');
       return await this.textOnlySearch(database, query, limit, filters);
     }
   }
