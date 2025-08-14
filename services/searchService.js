@@ -118,9 +118,9 @@ class SearchService {
             index: "product_text_search",
             compound: {
               must: [
-                // 主要全文搜索 - 使用 must 確保更精確匹配
+                // 主要全文搜索 - 使用 phrase 確保更精確匹配
                 {
-                  text: {
+                  phrase: {
                     query: query,
                     path: "name"
                   }
@@ -284,7 +284,7 @@ class SearchService {
             compound: {
               must: [
                 {
-                  text: {
+                  phrase: {
                     query: query,
                     path: "name"
                   }
