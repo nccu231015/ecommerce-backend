@@ -120,15 +120,13 @@ class SearchService {
           $search: {
             index: "product_text_search",
             compound: {
-              must: [
-                // 精確短語匹配 - 必須匹配（使用預處理後的查詢）
-                {
-                  phrase: {
-                    query: processedQuery,
-                    path: "name"
-                  }
+              must: processedQuery.split(' ').map(keyword => ({
+                // 每個關鍵詞都必須匹配 - v5.1.0 多關鍵詞智能搜索
+                text: {
+                  query: keyword,
+                  path: "name"
                 }
-              ],
+              })),
               should: [
                 // 語義增強：提升向量搜索匹配的文檔分數
                 ...boostConditions
