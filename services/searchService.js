@@ -49,7 +49,7 @@ class SearchService {
 
       // 3. 動態權重調整
       const weights = this.getOptimalWeights(query, filters);
-      console.log(`⚖️ 搜索權重 - 向量: ${weights.vectorPipeline}, 全文: ${weights.textPipeline}`);
+      console.log(`⚖️ 搜索權重 - 向量: ${weights.vectorPipeline}, 全文: ${weights.fullTextPipeline}`);
 
       // 4. 使用官方 $rankFusion 聚合階段執行混合搜索
       const results = await database.collection('products').aggregate([
@@ -98,9 +98,10 @@ class SearchService {
             combination: {
               weights: {
                 vectorPipeline: weights.vectorPipeline,
-                fullTextPipeline: weights.textPipeline
+                fullTextPipeline: weights.fullTextPipeline
               }
-            }
+            },
+            scoreDetails: true
           }
         },
         {
@@ -292,7 +293,7 @@ class SearchService {
     if (this.isPureBrandQuery(query)) {
       return {
         vectorPipeline: 0.3,
-        textPipeline: 0.7
+        fullTextPipeline: 0.7
       };
     }
     
@@ -300,7 +301,7 @@ class SearchService {
     if (this.isDescriptiveQuery(query)) {
       return {
         vectorPipeline: 0.7,
-        textPipeline: 0.3
+        fullTextPipeline: 0.3
       };
     }
     
@@ -308,14 +309,14 @@ class SearchService {
     if (filters.category) {
       return {
         vectorPipeline: 0.5,
-        textPipeline: 0.5
+        fullTextPipeline: 0.5
       };
     }
     
     // 默認平衡權重
     return {
       vectorPipeline: 0.6,
-      textPipeline: 0.4
+      fullTextPipeline: 0.4
     };
   }
 
