@@ -60,7 +60,7 @@ class SearchService {
             path: "product_embedding",
             queryVector: queryVector,
             numCandidates: Math.max(limit * 10, 100),
-            limit: Math.max(limit * 2, 20),
+            limit: Math.min(limit, 10),
             filter: filterConditions
           }
         },
@@ -102,11 +102,24 @@ class SearchService {
                   searchSource: "text"
                 }
               },
-              { $limit: Math.max(limit * 2, 20) }
+              { $limit: Math.min(limit, 10) }
             ]
           }
         },
-        // 第三階段：按 _id 分組，合併重複結果
+        // 第三階段：添加排名位置用於 RRF 計算 (MongoDB Atlas 支援)
+        {
+          $setWindowFields: {
+            partitionBy: "$searchSource",
+            sortBy: { 
+              vectorRank: -1,
+              textRank: -1
+            },
+            output: {
+              rankPosition: { $rank: {} }
+            }
+          }
+        },
+        // 第四階段：按 _id 分組，合併重複結果
         {
           $group: {
             _id: "$_id",
@@ -120,29 +133,57 @@ class SearchService {
             available: { $first: "$available" },
             vectorRank: { $max: "$vectorRank" },
             textRank: { $max: "$textRank" },
+            vectorRankPosition: { 
+              $max: {
+                $cond: {
+                  if: { $eq: ["$searchSource", "vector"] },
+                  then: "$rankPosition",
+                  else: null
+                }
+              }
+            },
+            textRankPosition: {
+              $max: {
+                $cond: {
+                  if: { $eq: ["$searchSource", "text"] },
+                  then: "$rankPosition", 
+                  else: null
+                }
+              }
+            },
             searchSources: { $addToSet: "$searchSource" }
           }
         },
-        // 第四階段：計算融合分數
+        // 第五階段：計算官方 RRF 融合分數 (Reciprocal Rank Fusion)
+        {
+          $addFields: {
+            // 官方 RRF 公式：1/(rank + k) 其中 k=60 是官方推薦常數
+            rrf_vector_score: {
+              $cond: {
+                if: { $gt: [{ $ifNull: ["$vectorRankPosition", 0] }, 0] },
+                then: { $divide: [1, { $add: [{ $ifNull: ["$vectorRankPosition", 999] }, 60] }] },
+                else: 0
+              }
+            },
+            rrf_text_score: {
+              $cond: {
+                if: { $gt: [{ $ifNull: ["$textRankPosition", 0] }, 0] },
+                then: { $divide: [1, { $add: [{ $ifNull: ["$textRankPosition", 999] }, 60] }] },
+                else: 0
+              }
+            }
+          }
+        },
+        // 第六階段：計算最終 RRF 融合分數
         {
           $addFields: {
             combinedScore: {
               $add: [
-                { 
-                  $multiply: [
-                    weights.vectorPipeline, 
-                    { $ifNull: ["$vectorRank", 0] }
-                  ]
-                },
-                { 
-                  $multiply: [
-                    weights.textPipeline, 
-                    { $ifNull: ["$textRank", 0] }
-                  ]
-                }
+                { $multiply: [weights.vectorPipeline, "$rrf_vector_score"] },
+                { $multiply: [weights.textPipeline, "$rrf_text_score"] }
               ]
             },
-            search_type: "hybrid_manual",
+            search_type: "hybrid_rrf_atlas",
             similarity_score: {
               $cond: {
                 if: { $gt: [{ $ifNull: ["$vectorRank", 0] }, 0] },
@@ -178,8 +219,9 @@ class SearchService {
         results: results,
         breakdown: {
           total_results: results.length,
-          search_method: "hybrid_search_manual_fusion",
-          weights_used: weights
+          search_method: "hybrid_search_rrf_atlas",
+          weights_used: weights,
+          algorithm: "MongoDB Atlas RRF (Reciprocal Rank Fusion)"
         }
       };
 
