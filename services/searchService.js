@@ -31,8 +31,11 @@ class SearchService {
     try {
       console.log(`🔄 開始混合搜索 (語義增強): "${query}"`);
       
-      // 1. 生成查詢向量
-      const queryVector = await this.generateQueryVector(query);
+      // 1. LLM 預處理：將自然語言轉換成精確關鍵詞
+      const processedQuery = await this.preprocessQuery(query);
+      
+      // 2. 生成查詢向量（使用預處理後的查詢）
+      const queryVector = await this.generateQueryVector(processedQuery);
       if (!queryVector) {
         console.log('❌ 向量生成失敗，降級到全文搜索');
         const fallbackResults = await this.textOnlySearch(database, query, limit, filters);
@@ -118,20 +121,11 @@ class SearchService {
             index: "product_text_search",
             compound: {
               should: [
-                // 精確短語匹配 - 最高優先級
+                // 精確短語匹配 - 唯一匹配方式（使用預處理後的查詢）
                 {
                   phrase: {
-                    query: query,
-                    path: "name",
-                    score: { boost: { value: 3.0 } }
-                  }
-                },
-                // 靈活文本匹配 - 處理自然語言查詢
-                {
-                  text: {
-                    query: query,
-                    path: "name",
-                    score: { boost: { value: 1.0 } }
+                    query: processedQuery,
+                    path: "name"
                   }
                 },
                 // 語義增強：提升向量搜索匹配的文檔分數
@@ -184,7 +178,9 @@ class SearchService {
       return {
         results: hybridResults,
         breakdown: {
-          search_method: "hybrid_search_semantic_boosting",
+          search_method: "hybrid_search_llm_preprocessed",
+          original_query: query,
+          processed_query: processedQuery,
           total_results: hybridResults.length,
           vector_matches: vectorResults.length,
           boost_applied: boostConditions.length
@@ -378,6 +374,58 @@ class SearchService {
   isDescriptiveQuery(query) {
     const descriptiveKeywords = ['舒適', '時尚', '休閒', '正式', '運動', '保暖', '透氣', '防水'];
     return descriptiveKeywords.some(keyword => query.includes(keyword));
+  }
+
+  // LLM 查詢預處理：將自然語言轉換成精確關鍵詞
+  async preprocessQuery(originalQuery) {
+    try {
+      console.log(`🧠 LLM 預處理查詢: "${originalQuery}"`);
+
+      const prompt = `
+作為一個專業的電商搜索助理，請將用戶的自然語言查詢轉換成適合精確匹配的關鍵詞。
+
+用戶查詢：「${originalQuery}」
+
+請分析並提取：
+1. 核心商品類型（如：外套、上衣、褲子、鞋子等）
+2. 重要修飾詞（如：顏色、品牌、款式等）
+
+回應格式：
+關鍵詞：[提取的關鍵詞，用空格分隔]
+
+範例：
+- 「給我全部的外套」→ 關鍵詞：外套
+- 「黑色的運動外套」→ 關鍵詞：黑色 運動 外套
+- 「PUMA的綠色連帽衫」→ 關鍵詞：PUMA 綠色 連帽
+`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 100,
+        temperature: 0.3 // 較低溫度確保一致性
+      });
+
+      const aiResponse = response.choices[0].message.content.trim();
+      console.log('🤖 LLM 預處理結果:', aiResponse);
+
+      // 解析關鍵詞
+      const keywordMatch = aiResponse.match(/關鍵詞：(.+)/);
+      if (keywordMatch) {
+        const processedQuery = keywordMatch[1].trim();
+        console.log(`✅ 查詢轉換: "${originalQuery}" → "${processedQuery}"`);
+        return processedQuery;
+      }
+
+      // 如果解析失敗，返回原始查詢
+      console.log(`⚠️ LLM 預處理解析失敗，使用原始查詢`);
+      return originalQuery;
+
+    } catch (error) {
+      console.error('❌ LLM 預處理失敗:', error.message);
+      // 如果 LLM 失敗，返回原始查詢
+      return originalQuery;
+    }
   }
 
   // LLM 推薦功能
