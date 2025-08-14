@@ -126,21 +126,13 @@ class SearchService {
                   phrase: {
                     query: processedQuery,
                     path: "name",
-                    score: { boost: { value: 2.0 } }
-                  }
-                },
-                // 備用：靈活文本匹配
-                {
-                  text: {
-                    query: processedQuery,
-                    path: "name",
-                    score: { boost: { value: 1.0 } }
+                    score: { boost: { value: 3.0 } }
                   }
                 },
                 // 語義增強：提升向量搜索匹配的文檔分數
                 ...boostConditions
               ],
-              minimumShouldMatch: 1,
+              minimumShouldMatch: boostConditions.length > 0 ? 0 : 1,
               filter: Object.keys(filterConditions).map(key => ({
                 equals: {
                   path: key,
