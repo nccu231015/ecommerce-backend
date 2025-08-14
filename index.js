@@ -76,8 +76,8 @@ app.get("/", async (req, res) => {
             mongodb: "connected"
         });
     } catch (error) {
-        res.json({
-            success: true,
+    res.json({
+        success: true,
             message: "Express app is running",
             timestamp: new Date().toISOString(),
             mongodb: "disconnected",
@@ -181,12 +181,12 @@ app.post("/addproduct", async (req, res) => {
         const id = await getNextProductId(database);
 
         const product = {
-            id: id,
-            name: req.body.name,
-            image: req.body.image,
-            category: req.body.category,
-            new_price: req.body.new_price,
-            old_price: req.body.old_price,
+        id: id,
+        name: req.body.name,
+        image: req.body.image,
+        category: req.body.category,
+        new_price: req.body.new_price,
+        old_price: req.body.old_price,
             description: req.body.description || "",
             categories: req.body.categories || [],
             tags: req.body.tags || [],
@@ -210,9 +210,9 @@ app.post("/addproduct", async (req, res) => {
         await productsCollection.insertOne(product);
         console.log("Product saved:", product.name);
         
-        res.json({
-            success: true,
-            name: req.body.name,
+    res.json({
+        success: true,
+        name: req.body.name,
             hasVector: !!productEmbedding,
             message: productEmbedding ? "商品添加成功，AI搜索已啟用" : "商品添加成功，但AI搜索功能暫時不可用"
         });
@@ -234,8 +234,8 @@ app.post("/removeproduct", async (req, res) => {
         await productsCollection.deleteOne({ id: req.body.id });
         console.log("Product removed with ID:", req.body.id);
         
-        res.json({
-            success: true,
+    res.json({
+        success: true,
             name: req.body.name
         });
     } catch (error) {
@@ -282,37 +282,37 @@ const getUsersCollection = async () => {
 app.post('/signup', async (req, res) => {
     try {
         const usersCollection = await getUsersCollection();
-        
+    
         const check = await usersCollection.findOne({ email: req.body.email });
-        if (check) {
+    if (check) {
             return res.status(400).json({
                 success: false,
                 errors: "Existing user found with same email address"
             });
-        }
+    }
         
-        let cart = {};
-        for (let i = 0; i < 300; i++) {
-            cart[i] = 0;
-        }
+    let cart = {};
+    for (let i = 0; i < 300; i++) {
+        cart[i] = 0;
+    }
         
         const user = {
             name: req.body.username,
-            email: req.body.email,
-            password: req.body.password,
+        email: req.body.email,
+        password: req.body.password,
             cartData: cart,
             date: new Date()
         };
-        
+
         const result = await usersCollection.insertOne(user);
-        
-        const data = {
-            user: {
+
+    const data = {
+        user: {
                 id: result.insertedId
-            }
+        }
         };
-        
-        const token = jwt.sign(data, 'secret_ecom');
+
+    const token = jwt.sign(data, 'secret_ecom');
         res.json({ success: true, token });
     } catch (error) {
         console.error("Signup error:", error);
@@ -329,11 +329,11 @@ app.post('/login', async (req, res) => {
         const usersCollection = await getUsersCollection();
         
         const user = await usersCollection.findOne({ email: req.body.email });
-        if (user) {
-            const passCompare = req.body.password === user.password;
-            if (passCompare) {
-                const data = {
-                    user: {
+    if (user) {
+        const passCompare = req.body.password === user.password;
+        if (passCompare) {
+            const data = {
+                user: {
                         id: user._id
                     }
                 };
@@ -393,16 +393,16 @@ app.get('/popularinwomen', async (req, res) => {
 });
 
 // Middleware to fetch user
-const fetchUser = async (req, res, next) => {
-    const token = req.header('auth-token');
-    if (!token) {
+    const fetchUser = async (req, res, next) => {
+        const token = req.header('auth-token');
+        if (!token) {
         res.status(401).send({ errors: "Please authenticate using valid token" });
     } else {
-        try {
-            const data = jwt.verify(token, 'secret_ecom');
-            req.user = data.user;
-            next();
-        } catch (error) {
+            try {
+                const data = jwt.verify(token, 'secret_ecom');
+                req.user = data.user;
+                next();
+            } catch (error) {
             res.status(401).send({ errors: "Please authenticate using a valid token" });
         }
     }
@@ -460,7 +460,7 @@ app.post('/getcart', fetchUser, async (req, res) => {
         const usersCollection = await getUsersCollection();
         
         const userData = await usersCollection.findOne({ _id: new ObjectId(req.user.id) });
-        res.json(userData.cartData);
+    res.json(userData.cartData);
     } catch (error) {
         console.error("Get cart error:", error);
         res.status(500).json({
@@ -559,13 +559,13 @@ app.post("/test-llm-optimization", async (req, res) => {
     }
 });
 
-// API for AI search
+// API for AI search - 混合搜索（向量搜索 + 全文搜索）+ LLM 推薦
 app.post("/ai-search", async (req, res) => {
     try {
         console.log(`🚨 收到 AI 搜索請求！`);
         console.log(`📨 請求體:`, req.body);
         
-        const { query, limit = 10, filters = {}, searchType = 'hybrid' } = req.body;
+        const { query, limit = 10, filters = {} } = req.body;
         
         if (!query || !query.trim()) {
             console.log(`❌ 搜索查詢為空`);
@@ -575,21 +575,26 @@ app.post("/ai-search", async (req, res) => {
             });
         }
 
-        console.log(`🔍 AI搜索請求: "${query}", limit: ${limit}`);
+        console.log(`🔍 AI混合搜索請求: "${query}", limit: ${limit}`);
         
         const database = await connectToDatabase();
-        let searchResults;
         
-        // 只使用純語意向量搜索
-        console.log(`🎯 執行純語意向量搜索: "${query}"`);
-        searchResults = await searchService.vectorOnlySearch(database, query, limit, filters);
+        // 執行混合搜索
+        console.log(`🔄 執行混合搜索 (向量 + 全文): "${query}"`);
+        let searchResults = await searchService.hybridSearch(database, query, limit, filters);
+        
+        // 添加 LLM 推薦標記（如果有搜索結果）
+        if (searchResults.results && searchResults.results.length > 0) {
+            console.log(`🤖 添加 LLM 推薦分析...`);
+            searchResults.results = await searchService.addLLMRecommendation(query, searchResults.results);
+        }
         
         console.log(`✅ AI搜索完成: 找到 ${searchResults.results.length} 個結果`);
         
         res.json({
             success: true,
             query: query,
-            searchType: searchType,
+            searchType: "hybrid",
             totalResults: searchResults.results.length,
             breakdown: searchResults.breakdown,
             results: searchResults.results
