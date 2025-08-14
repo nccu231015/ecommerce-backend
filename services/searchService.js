@@ -117,14 +117,16 @@ class SearchService {
           $search: {
             index: "product_text_search",
             compound: {
-              should: [
-                // 主要全文搜索
+              must: [
+                // 主要全文搜索 - 使用 must 確保更精確匹配
                 {
                   text: {
                     query: query,
                     path: "name"
                   }
-                },
+                }
+              ],
+              should: [
                 // 語義增強：提升向量搜索匹配的文檔分數
                 ...boostConditions
               ],
@@ -133,7 +135,8 @@ class SearchService {
                   path: key,
                   value: filterConditions[key].$eq
                 }
-              }))
+              })),
+              minimumShouldMatch: 0 // should 條件是可選的增強
             }
           }
         },
