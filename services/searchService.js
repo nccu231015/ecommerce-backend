@@ -106,20 +106,39 @@ class SearchService {
             ]
           }
         },
-        // 第三階段：添加排名位置用於 RRF 計算 (MongoDB Atlas 支援)
+        // 第三階段：為向量搜索結果添加排名
         {
           $setWindowFields: {
             partitionBy: "$searchSource",
-            sortBy: { 
-              vectorRank: -1,
-              textRank: -1
-            },
+            sortBy: { vectorRank: -1 },
             output: {
-              rankPosition: { $rank: {} }
+              vectorRankPosition: { 
+                $cond: {
+                  if: { $eq: ["$searchSource", "vector"] },
+                  then: { $rank: {} },
+                  else: null
+                }
+              }
             }
           }
         },
-        // 第四階段：按 _id 分組，合併重複結果
+        // 第四階段：為全文搜索結果添加排名
+        {
+          $setWindowFields: {
+            partitionBy: "$searchSource", 
+            sortBy: { textRank: -1 },
+            output: {
+              textRankPosition: {
+                $cond: {
+                  if: { $eq: ["$searchSource", "text"] },
+                  then: { $rank: {} },
+                  else: null
+                }
+              }
+            }
+          }
+        },
+        // 第五階段：按 _id 分組，合併重複結果
         {
           $group: {
             _id: "$_id",
@@ -133,28 +152,12 @@ class SearchService {
             available: { $first: "$available" },
             vectorRank: { $max: "$vectorRank" },
             textRank: { $max: "$textRank" },
-            vectorRankPosition: { 
-              $max: {
-                $cond: {
-                  if: { $eq: ["$searchSource", "vector"] },
-                  then: "$rankPosition",
-                  else: null
-                }
-              }
-            },
-            textRankPosition: {
-              $max: {
-                $cond: {
-                  if: { $eq: ["$searchSource", "text"] },
-                  then: "$rankPosition", 
-                  else: null
-                }
-              }
-            },
+            vectorRankPosition: { $max: "$vectorRankPosition" },
+            textRankPosition: { $max: "$textRankPosition" },
             searchSources: { $addToSet: "$searchSource" }
           }
         },
-        // 第五階段：計算官方 RRF 融合分數 (Reciprocal Rank Fusion)
+        // 第六階段：計算官方 RRF 融合分數 (Reciprocal Rank Fusion)
         {
           $addFields: {
             // 官方 RRF 公式：1/(rank + k) 其中 k=60 是官方推薦常數
@@ -174,7 +177,7 @@ class SearchService {
             }
           }
         },
-        // 第六階段：計算最終 RRF 融合分數
+        // 第七階段：計算最終 RRF 融合分數
         {
           $addFields: {
             combinedScore: {
@@ -193,7 +196,7 @@ class SearchService {
             }
           }
         },
-        // 第五階段：排序和限制結果
+        // 第八階段：排序和限制結果
         { $sort: { combinedScore: -1 } },
         {
           $project: {
