@@ -744,5 +744,82 @@ app.listen(port, (error) => {
     }
 });
 
+// 診斷向量搜索端點
+app.post('/debug-vector', async (req, res) => {
+    try {
+        const { query } = req.body;
+        const database = await connectToDatabase();
+        
+        console.log(`🔍 診斷向量搜索: "${query}"`);
+        
+        // 測試向量生成
+        const queryVector = await searchService.generateQueryVector(query);
+        if (!queryVector) {
+            return res.json({
+                success: false,
+                step: "vector_generation",
+                error: "向量生成失敗"
+            });
+        }
+        
+        console.log(`✅ 向量生成成功，維度: ${queryVector.length}`);
+        
+        // 測試向量搜索
+        try {
+            const vectorResults = await database.collection('products').aggregate([
+                {
+                    $vectorSearch: {
+                        index: "vector_index",
+                        path: "product_embedding", 
+                        queryVector: queryVector,
+                        numCandidates: 100,
+                        limit: 5,
+                        filter: { available: { $eq: true } }
+                    }
+                },
+                {
+                    $addFields: {
+                        search_type: "vector_only",
+                        similarity_score: { $meta: "searchScore" }
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1, id: 1, name: 1, search_type: 1, similarity_score: 1
+                    }
+                }
+            ]).toArray();
+            
+            console.log(`✅ 向量搜索成功，結果: ${vectorResults.length}`);
+            
+            res.json({
+                success: true,
+                vectorGeneration: "成功",
+                vectorDimension: queryVector.length,
+                vectorSearchResults: vectorResults.length,
+                results: vectorResults
+            });
+            
+        } catch (vectorError) {
+            console.error(`❌ 向量搜索失敗:`, vectorError.message);
+            res.json({
+                success: false,
+                step: "vector_search",
+                error: vectorError.message,
+                vectorGeneration: "成功",
+                vectorDimension: queryVector.length
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ 診斷失敗:', error.message);
+        res.json({
+            success: false,
+            step: "general",
+            error: error.message
+        });
+    }
+});
+
 // Export for Vercel
 module.exports = app;
