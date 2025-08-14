@@ -120,19 +120,27 @@ class SearchService {
           $search: {
             index: "product_text_search",
             compound: {
-              must: processedQuery.split(' ').map(keyword => ({
-                // 每個關鍵詞都必須在商品名稱中出現 - 使用 wildcard 確保包含
-                wildcard: {
-                  query: `*${keyword}*`,
-                  path: "name",
-                  allowAnalyzedField: true
-                }
-              })),
               should: [
+                // 優先嘗試精確短語匹配
+                {
+                  phrase: {
+                    query: processedQuery,
+                    path: "name",
+                    score: { boost: { value: 2.0 } }
+                  }
+                },
+                // 備用：靈活文本匹配
+                {
+                  text: {
+                    query: processedQuery,
+                    path: "name",
+                    score: { boost: { value: 1.0 } }
+                  }
+                },
                 // 語義增強：提升向量搜索匹配的文檔分數
                 ...boostConditions
               ],
-              minimumShouldMatch: 0,
+              minimumShouldMatch: 1,
               filter: Object.keys(filterConditions).map(key => ({
                 equals: {
                   path: key,
