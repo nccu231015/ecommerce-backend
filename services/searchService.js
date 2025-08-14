@@ -79,19 +79,11 @@ class SearchService {
                 $search: {
                   index: "product_text_search",
                   compound: {
-                    should: [
+                    must: [
                       {
                         text: {
                           query: query,
-                          path: ["name", "description"],
-                          score: { boost: { value: 2.0 } }
-                        }
-                      },
-                      {
-                        text: {
-                          query: query,
-                          path: "tags",
-                          score: { boost: { value: 1.5 } }
+                          path: "name"
                         }
                       }
                     ],
