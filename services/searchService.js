@@ -125,10 +125,23 @@ class SearchService {
       
       if (results.length === 0) {
         console.log('🔄 混合搜索無結果，嘗試向量搜索...');
-        return await this.vectorOnlySearch(database, queryVector, limit, filters);
+        const fallbackResults = await this.vectorOnlySearch(database, queryVector, limit, filters);
+        return {
+          results: fallbackResults,
+          breakdown: {
+            search_method: "vector_only_search",
+            total_results: fallbackResults.length
+          }
+        };
       }
 
-      return results;
+      return {
+        results: results,
+        breakdown: {
+          search_method: "hybrid_search_rankfusion",
+          total_results: results.length
+        }
+      };
 
     } catch (error) {
       console.error('❌ 官方 RRF 混合搜索失敗:', error.message);
@@ -138,10 +151,24 @@ class SearchService {
       console.log('🔄 降級到向量搜索...');
       const queryVector = await this.generateQueryVector(query);
       if (queryVector) {
-        return await this.vectorOnlySearch(database, queryVector, limit, filters);
+        const fallbackResults = await this.vectorOnlySearch(database, queryVector, limit, filters);
+        return {
+          results: fallbackResults,
+          breakdown: {
+            search_method: "vector_only_search",
+            total_results: fallbackResults.length
+          }
+        };
       } else {
         console.log('🔄 向量生成失敗，最終降級到全文搜索...');
-        return await this.textOnlySearch(database, query, limit, filters);
+        const fallbackResults = await this.textOnlySearch(database, query, limit, filters);
+        return {
+          results: fallbackResults,
+          breakdown: {
+            search_method: "text_only_search",
+            total_results: fallbackResults.length
+          }
+        };
       }
     }
   }

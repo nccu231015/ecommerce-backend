@@ -587,7 +587,7 @@ app.post("/ai-search", async (req, res) => {
         // 添加 LLM 推薦標記（如果有搜索結果）
         if (searchResults.results && searchResults.results.length > 0) {
             console.log(`🤖 添加 LLM 推薦分析...`);
-            searchResults.results = await searchService.addLLMRecommendation(query, searchResults.results);
+            searchResults.results = await searchService.addLLMRecommendation(searchResults.results, query);
         }
         
         console.log(`✅ AI搜索完成: 找到 ${searchResults.results.length} 個結果`);
