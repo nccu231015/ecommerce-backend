@@ -821,35 +821,74 @@ app.post('/debug-vector', async (req, res) => {
     }
 });
 
-// 測試手動融合混合搜索端點
+// 測試 MongoDB Atlas Window Functions 支援
 app.post('/debug-hybrid', async (req, res) => {
     try {
         const { query } = req.body;
         const database = await connectToDatabase();
         
-        console.log(`🔍 測試手動融合混合搜索: "${query}"`);
+        console.log(`🔍 測試 MongoDB Atlas Window Functions: "${query}"`);
         
-        // 直接調用修復後的 hybridSearch 方法
-        const searchResults = await searchService.hybridSearch(database, query, 5, {});
-        
-        res.json({
-            success: true,
-            step: "manual_fusion_success",
-            searchMethod: searchResults.breakdown.search_method,
-            totalResults: searchResults.results.length,
-            results: searchResults.results.map(r => ({
-                id: r.id,
-                name: r.name,
-                search_type: r.search_type,
-                similarity_score: r.similarity_score
-            }))
-        });
+        // 測試基本的 $setWindowFields 支援
+        try {
+            const testResults = await database.collection('products').aggregate([
+                { $match: { available: true } },
+                { $limit: 3 },
+                {
+                    $setWindowFields: {
+                        sortBy: { id: 1 },
+                        output: {
+                            testRank: { $rank: {} }
+                        }
+                    }
+                },
+                { $project: { id: 1, name: 1, testRank: 1 } }
+            ]).toArray();
+            
+            console.log('✅ Window Functions 支援測試成功');
+            
+            // 如果 Window Functions 支援，測試完整的混合搜索
+            const searchResults = await searchService.hybridSearch(database, query, 5, {});
+            
+            res.json({
+                success: true,
+                windowFunctionsSupported: true,
+                testResults: testResults,
+                searchMethod: searchResults.breakdown.search_method,
+                totalResults: searchResults.results.length,
+                results: searchResults.results.map(r => ({
+                    id: r.id,
+                    name: r.name,
+                    search_type: r.search_type,
+                    similarity_score: r.similarity_score
+                }))
+            });
+            
+        } catch (windowError) {
+            console.error('❌ Window Functions 不支援:', windowError.message);
+            
+            // 降級測試：直接測試向量搜索
+            const vectorResults = await searchService.vectorOnlySearch(database, query, 5, {});
+            
+            res.json({
+                success: false,
+                windowFunctionsSupported: false,
+                windowError: windowError.message,
+                fallbackMethod: vectorResults.breakdown.search_method,
+                totalResults: vectorResults.results.length,
+                results: vectorResults.results.map(r => ({
+                    id: r.id,
+                    name: r.name,
+                    search_type: r.search_type
+                }))
+            });
+        }
         
     } catch (error) {
-        console.error('❌ 手動融合診斷失敗:', error.message);
+        console.error('❌ 診斷測試失敗:', error.message);
         res.json({
             success: false,
-            step: "manual_fusion_error",
+            step: "general_error",
             error: error.message
         });
     }
