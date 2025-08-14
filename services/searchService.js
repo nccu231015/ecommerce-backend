@@ -120,19 +120,20 @@ class SearchService {
           $search: {
             index: "product_text_search",
             compound: {
-              should: [
-                // 優先嘗試精確短語匹配
+              must: [
+                // 精確短語匹配 - 必須匹配（使用預處理後的查詢）
                 {
                   phrase: {
                     query: processedQuery,
-                    path: "name",
-                    score: { boost: { value: 3.0 } }
+                    path: "name"
                   }
-                },
+                }
+              ],
+              should: [
                 // 語義增強：提升向量搜索匹配的文檔分數
                 ...boostConditions
               ],
-              minimumShouldMatch: boostConditions.length > 0 ? 0 : 1,
+              minimumShouldMatch: 0,
               filter: Object.keys(filterConditions).map(key => ({
                 equals: {
                   path: key,
