@@ -227,6 +227,8 @@ class SearchService {
 
     } catch (error) {
       console.error('❌ 混合搜索失敗:', error.message);
+      console.error('❌ 錯誤堆疊:', error.stack);
+      console.error('❌ 錯誤詳細:', JSON.stringify(error, null, 2));
       
       // 降級到純向量搜索
       console.log('🔄 降級到純向量搜索');
