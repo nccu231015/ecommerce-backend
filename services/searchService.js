@@ -117,19 +117,27 @@ class SearchService {
           $search: {
             index: "product_text_search",
             compound: {
-              must: [
-                // 主要全文搜索 - 使用 phrase 確保更精確匹配
+              should: [
+                // 精確短語匹配 - 最高優先級
                 {
                   phrase: {
                     query: query,
-                    path: "name"
+                    path: "name",
+                    score: { boost: { value: 3.0 } }
                   }
-                }
-              ],
-              should: [
+                },
+                // 靈活文本匹配 - 處理自然語言查詢
+                {
+                  text: {
+                    query: query,
+                    path: "name",
+                    score: { boost: { value: 1.0 } }
+                  }
+                },
                 // 語義增強：提升向量搜索匹配的文檔分數
                 ...boostConditions
               ],
+              minimumShouldMatch: 1,
               filter: Object.keys(filterConditions).map(key => ({
                 equals: {
                   path: key,
