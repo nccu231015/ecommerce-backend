@@ -821,5 +821,103 @@ app.post('/debug-vector', async (req, res) => {
     }
 });
 
+// 測試混合搜索端點
+app.post('/debug-hybrid', async (req, res) => {
+    try {
+        const { query } = req.body;
+        const database = await connectToDatabase();
+        
+        console.log(`🔍 測試混合搜索: "${query}"`);
+        
+        // 測試向量生成
+        const queryVector = await searchService.generateQueryVector(query);
+        if (!queryVector) {
+            return res.json({
+                success: false,
+                step: "vector_generation",
+                error: "向量生成失敗"
+            });
+        }
+        
+        console.log(`✅ 向量生成成功，維度: ${queryVector.length}`);
+        
+        // 測試 $rankFusion
+        try {
+            const filterConditions = { available: { $eq: true } };
+            const weights = { vectorPipeline: 0.7, textPipeline: 0.3 };
+            
+            const results = await database.collection('products').aggregate([
+                {
+                    $rankFusion: {
+                        input: {
+                            pipelines: {
+                                vectorPipeline: [{
+                                    $vectorSearch: {
+                                        index: "vector_index",
+                                        path: "product_embedding",
+                                        queryVector: queryVector,
+                                        numCandidates: 100,
+                                        limit: 20,
+                                        filter: filterConditions
+                                    }
+                                }],
+                                textPipeline: [{
+                                    $search: {
+                                        index: "product_text_search",
+                                        compound: {
+                                            should: [
+                                                { text: { query: query, path: ["name", "description"], score: { boost: { value: 2.0 } } } },
+                                                { text: { query: query, path: "tags", score: { boost: { value: 1.5 } } } }
+                                            ],
+                                            filter: Object.keys(filterConditions).map(key => ({
+                                                equals: { path: key, value: filterConditions[key].$eq }
+                                            }))
+                                        }
+                                    }
+                                }, { $limit: 20 }]
+                            }
+                        },
+                        combination: { weights: weights }
+                    }
+                },
+                { $addFields: { search_type: "hybrid", similarity_score: { $meta: "searchScore" } } },
+                { $project: { _id: 1, id: 1, name: 1, category: 1, search_type: 1, similarity_score: 1 } },
+                { $limit: 5 }
+            ]).toArray();
+            
+            console.log(`✅ $rankFusion 成功，結果: ${results.length}`);
+            
+            res.json({
+                success: true,
+                step: "rankFusion_success",
+                vectorGeneration: "成功",
+                vectorDimension: queryVector.length,
+                hybridSearchResults: results.length,
+                results: results
+            });
+            
+        } catch (hybridError) {
+            console.error(`❌ $rankFusion 失敗:`, hybridError);
+            res.json({
+                success: false,
+                step: "rankFusion_error",
+                error: hybridError.message,
+                errorCode: hybridError.code,
+                errorName: hybridError.name,
+                vectorGeneration: "成功",
+                vectorDimension: queryVector.length
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ 混合搜索診斷失敗:', error.message);
+        res.json({
+            success: false,
+            step: "general",
+            error: error.message
+        });
+    }
+});
+
 // Export for Vercel
 module.exports = app;
