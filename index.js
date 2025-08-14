@@ -620,6 +620,44 @@ app.post("/ai-search", async (req, res) => {
     }
 });
 
+// API for related products - 獲取相關商品推薦
+app.get("/related-products/:productId", async (req, res) => {
+    try {
+        const { productId } = req.params;
+        const { limit = 4 } = req.query;
+        
+        if (!productId) {
+            return res.status(400).json({
+                success: false,
+                message: "商品ID不能為空"
+            });
+        }
+        
+        console.log(`🔍 獲取商品 ID: ${productId} 的相關推薦`);
+        
+        const database = await connectToDatabase();
+        const relatedResults = await searchService.getRelatedProducts(database, productId, parseInt(limit));
+        
+        console.log(`✅ 相關商品推薦完成: 找到 ${relatedResults.results.length} 個結果`);
+        
+        res.json({
+            success: true,
+            productId: productId,
+            totalResults: relatedResults.results.length,
+            breakdown: relatedResults.breakdown,
+            results: relatedResults.results
+        });
+        
+    } catch (error) {
+        console.error("❌ 獲取相關商品失敗:", error.message);
+        res.status(500).json({
+            success: false,
+            message: "相關商品推薦服務暫時不可用",
+            error: error.message
+        });
+    }
+});
+
 
 // API for exact product name match
 app.post("/exact-search", async (req, res) => {

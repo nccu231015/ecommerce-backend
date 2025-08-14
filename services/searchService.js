@@ -1,80 +1,78 @@
+const { Configuration, OpenAIApi } = require('openai');
 const OpenAI = require('openai');
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
 class SearchService {
-  // 生成查詢向量
+  constructor() {
+    this.openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+  }
+
+  // 生成向量嵌入的方法
   async generateQueryVector(query) {
     try {
-      console.log(`生成查詢向量: "${query}"`);
-      
-      const response = await openai.embeddings.create({
+      if (!query || query.trim() === '') {
+        return null;
+      }
+
+      console.log(`🤖 生成查詢向量: "${query}"`);
+
+      const embedding = await this.openai.embeddings.create({
         model: "text-embedding-ada-002",
-        input: query,
-        encoding_format: "float"
+        input: query.trim(),
+        dimensions: 1536
       });
-      
-      const vector = response.data[0].embedding;
-      console.log(`✅ 查詢向量生成成功 - 維度: ${vector.length}`);
-      
-      return vector;
+
+      console.log(`✅ 向量生成成功，維度: ${embedding.data[0].embedding.length}`);
+      return embedding.data[0].embedding;
+
     } catch (error) {
-      console.error('❌ 查詢向量生成失敗:', error.message);
+      console.error('❌ 向量生成失敗:', error.message);
       return null;
     }
   }
 
-  // MongoDB Atlas 混合搜索 - 語義增強 (Semantic Boosting) 實現
-  async hybridSearch(database, query, limit = 10, filters = {}) {
+  // 純向量搜索功能
+  async vectorOnlySearch(database, query, limit = 10, filters = {}) {
     try {
-      console.log(`🔄 開始混合搜索 (語義增強): "${query}"`);
-      
-      // 1. LLM 預處理：將自然語言轉換成精確關鍵詞
-      const processedQuery = await this.preprocessQuery(query);
-      
-      // 2. 生成查詢向量（使用預處理後的查詢）
-      const queryVector = await this.generateQueryVector(processedQuery);
+      console.log(`🔍 執行向量搜索: "${query}"`);
+
+      // 1. 生成查詢向量
+      const queryVector = await this.generateQueryVector(query);
       if (!queryVector) {
-        console.log('❌ 向量生成失敗，降級到全文搜索');
-        const fallbackResults = await this.textOnlySearch(database, query, limit, filters);
-        return {
-          results: fallbackResults,
-          breakdown: {
-            search_method: "text_only_search",
-            total_results: fallbackResults.length
-          }
-        };
+        console.log(`❌ 向量生成失敗，無法執行向量搜索`);
+        return { results: [], breakdown: { search_method: "vector_failed", error: "vector_generation_failed" } };
       }
 
-      // 2. 構建篩選條件
-      const filterConditions = {
-        available: { $eq: true }
-      };
+      // 2. 構建過濾條件
+      const filterConditions = {};
       
-      if (filters.category) {
-        filterConditions.category = { $eq: filters.category };
-      }
+      // 添加可用性過濾
+      filterConditions.available = { $eq: true };
+      
+      // 添加用戶自定義過濾條件
+      Object.keys(filters).forEach(key => {
+        if (filters[key] !== undefined && filters[key] !== null) {
+          filterConditions[key] = filters[key];
+        }
+      });
 
-      // 3. 動態權重調整
-      const weights = this.getOptimalWeights(query, filters);
-      console.log(`⚖️ 搜索權重 - 向量: ${weights.vectorPipeline}, 全文: ${weights.fullTextPipeline}`);
-
-      // 4. 步驟一：執行向量搜索獲取語義相似的文檔
-      const vectorCutoff = 0.75; // 相似度閾值
-      const vectorWeight = weights.vectorPipeline;
-      const numCandidates = Math.max(limit * 10, 100);
-
+      // 3. 執行向量搜索
       const vectorResults = await database.collection('products').aggregate([
         {
           $vectorSearch: {
             index: "vector_index",
             path: "product_embedding",
             queryVector: queryVector,
-            numCandidates: numCandidates,
-            limit: Math.max(limit * 2, 20),
+            numCandidates: 100, // 增加候選項以提高精確度
+            limit: limit,
             filter: filterConditions
+          }
+        },
+        {
+          $addFields: {
+            vectorScore: { $meta: "searchScore" },
+            search_type: "vector_only"
           }
         },
         {
@@ -88,12 +86,79 @@ class SearchService {
             old_price: 1,
             description: 1,
             available: 1,
-            vectorScore: { $meta: "searchScore" }
+            vectorScore: 1,
+            search_type: 1
+          }
+        }
+      ]).toArray();
+
+      console.log(`✅ 向量搜索完成: 找到 ${vectorResults.length} 個結果`);
+
+      return {
+        results: vectorResults,
+        breakdown: {
+          search_method: "vector_only",
+          total_results: vectorResults.length
+        }
+      };
+
+    } catch (error) {
+      console.error(`❌ 向量搜索失敗: ${error.message}`);
+      
+      // 如果向量搜索失敗，返回空結果
+      return { results: [], breakdown: { search_method: "vector_error", error: error.message } };
+    }
+  }
+
+  // 混合搜索功能（向量搜索 + 全文搜索）
+  async hybridSearch(database, query, limit = 10, filters = {}) {
+    try {
+      console.log(`🔍 執行混合搜索 (向量 + 全文): "${query}"`);
+      
+      // 0. 預處理查詢
+      const processedQuery = await this.preprocessQuery(query);
+      console.log(`🧠 預處理後的查詢: "${processedQuery}"`);
+      
+      // 1. 向量搜索閾值和權重
+      const vectorCutoff = 0.5;  // 向量分數閾值
+      const vectorWeight = 0.7;  // 向量搜索權重
+      
+      // 2. 構建過濾條件
+      const filterConditions = {};
+      
+      // 添加可用性過濾
+      filterConditions.available = { $eq: true };
+      
+      // 添加用戶自定義過濾條件
+      Object.keys(filters).forEach(key => {
+        if (filters[key] !== undefined && filters[key] !== null) {
+          filterConditions[key] = filters[key];
+        }
+      });
+      
+      // 3. 步驟一：執行向量搜索獲取語義相似結果
+      // 生成查詢向量
+      const queryVector = await this.generateQueryVector(processedQuery);
+      if (!queryVector) {
+        console.log(`❌ 向量生成失敗，降級為純全文搜索`);
+        return await this.textOnlySearch(database, processedQuery, limit, filters);
+      }
+      
+      // 4. 執行向量搜索
+      const vectorResults = await database.collection('products').aggregate([
+        {
+          $vectorSearch: {
+            index: "vector_index",
+            path: "product_embedding",
+            queryVector: queryVector,
+            numCandidates: 100,
+            limit: 50, // 獲取更多候選項用於語義增強
+            filter: filterConditions
           }
         },
         {
-          $match: {
-            vectorScore: { $gte: vectorCutoff }
+          $addFields: {
+            vectorScore: { $meta: "searchScore" }
           }
         }
       ]).toArray();
@@ -160,137 +225,75 @@ class SearchService {
         { $limit: limit }
       ]).toArray();
 
-      console.log(`✅ 語義增強混合搜索完成 - 找到 ${hybridResults.length} 個結果`);
-      
+      console.log(`✅ 混合搜索完成: 找到 ${hybridResults.length} 個結果`);
+
+      // 7. 如果混合搜索沒有結果，降級為純向量搜索
       if (hybridResults.length === 0) {
-        console.log('🔄 混合搜索無結果，嘗試向量搜索...');
-        const fallbackResults = await this.vectorOnlySearch(database, queryVector, limit, filters);
-        return {
-          results: fallbackResults,
-          breakdown: {
-            search_method: "vector_only_search",
-            total_results: fallbackResults.length,
-            vector_matches: vectorResults.length
-          }
-        };
+        console.log(`⚠️ 混合搜索沒有結果，降級為純向量搜索`);
+        return await this.vectorOnlySearch(database, query, limit, filters);
       }
 
       return {
         results: hybridResults,
         breakdown: {
-          search_method: "hybrid_search_llm_preprocessed",
-          original_query: query,
-          processed_query: processedQuery,
-          total_results: hybridResults.length,
-          vector_matches: vectorResults.length,
-          boost_applied: boostConditions.length
+          search_method: "hybrid_semantic_boosting",
+          vector_results: vectorResults.length,
+          hybrid_results: hybridResults.length,
+          processed_query: processedQuery
         }
       };
 
     } catch (error) {
-      console.error('❌ 語義增強混合搜索失敗:', error.message);
-      console.error('❌ 錯誤堆疊:', error.stack);
+      console.error(`❌ 混合搜索失敗: ${error.message}`);
       
-      // 智能降級策略
-      console.log('🔄 降級到向量搜索...');
-      const queryVector = await this.generateQueryVector(query);
-      if (queryVector) {
-        const fallbackResults = await this.vectorOnlySearch(database, queryVector, limit, filters);
-        return {
-          results: fallbackResults,
-          breakdown: {
-            search_method: "vector_only_search",
-            total_results: fallbackResults.length
-          }
-        };
-      } else {
-        console.log('🔄 向量生成失敗，最終降級到全文搜索...');
-        const fallbackResults = await this.textOnlySearch(database, query, limit, filters);
-        return {
-          results: fallbackResults,
-          breakdown: {
-            search_method: "text_only_search",
-            total_results: fallbackResults.length
-          }
-        };
+      // 如果混合搜索失敗，嘗試降級為純向量搜索
+      try {
+        console.log(`⚠️ 降級為純向量搜索`);
+        return await this.vectorOnlySearch(database, query, limit, filters);
+      } catch (vectorError) {
+        console.error(`❌ 降級搜索也失敗: ${vectorError.message}`);
+        
+        // 如果向量搜索也失敗，嘗試降級為純全文搜索
+        try {
+          console.log(`⚠️ 降級為純全文搜索`);
+          return await this.textOnlySearch(database, query, limit, filters);
+        } catch (textError) {
+          console.error(`❌ 所有搜索方法都失敗`);
+          return { results: [], breakdown: { search_method: "all_methods_failed", error: error.message } };
+        }
       }
     }
   }
 
-  // 向量搜索 (降級選項)
-  async vectorOnlySearch(database, queryVector, limit = 10, filters = {}) {
-    try {
-      console.log('🔍 執行向量搜索...');
-      
-      const filterConditions = {
-        available: { $eq: true }
-      };
-      
-      if (filters.category) {
-        filterConditions.category = { $eq: filters.category };
-      }
-
-      const results = await database.collection('products').aggregate([
-        {
-          $vectorSearch: {
-            index: "vector_index",
-            path: "product_embedding", 
-            queryVector: queryVector,
-            numCandidates: Math.max(limit * 10, 100),
-            limit: limit,
-            filter: filterConditions
-          }
-        },
-        {
-          $project: {
-            _id: 1,
-            id: 1,
-            name: 1,
-            image: 1,
-            category: 1,
-            new_price: 1,
-            old_price: 1,
-            description: 1,
-            available: 1,
-            combinedScore: { $meta: "searchScore" },
-            searchSources: ["vector"]
-          }
-        },
-        { $limit: limit }
-      ]).toArray();
-
-      console.log(`✅ 向量搜索完成 - 找到 ${results.length} 個結果`);
-      return results;
-
-    } catch (error) {
-      console.error('❌ 向量搜索失敗:', error.message);
-      throw error;
-    }
-  }
-
-  // 全文搜索 (最終降級選項)
+  // 純全文搜索功能（作為後備）
   async textOnlySearch(database, query, limit = 10, filters = {}) {
     try {
       console.log(`🔍 執行全文搜索: "${query}"`);
-      
-      const filterConditions = {
-        available: { $eq: true }
-      };
-      
-      if (filters.category) {
-        filterConditions.category = { $eq: filters.category };
-      }
 
-      const results = await database.collection('products').aggregate([
+      // 構建過濾條件
+      const filterConditions = {};
+      
+      // 添加可用性過濾
+      filterConditions.available = { $eq: true };
+      
+      // 添加用戶自定義過濾條件
+      Object.keys(filters).forEach(key => {
+        if (filters[key] !== undefined && filters[key] !== null) {
+          filterConditions[key] = filters[key];
+        }
+      });
+
+      // 執行全文搜索
+      const textResults = await database.collection('products').aggregate([
         {
           $search: {
             index: "product_text_search",
             compound: {
               must: [
                 {
-                  phrase: {
+                  text: {
                     query: query,
-                    path: "name"
+                    path: ["name", "description", "category", "tags"]
                   }
                 }
               ],
@@ -304,6 +307,12 @@ class SearchService {
           }
         },
         {
+          $addFields: {
+            textScore: { $meta: "searchScore" },
+            search_type: "text_only"
+          }
+        },
+        {
           $project: {
             _id: 1,
             id: 1,
@@ -314,89 +323,50 @@ class SearchService {
             old_price: 1,
             description: 1,
             available: 1,
-            combinedScore: { $meta: "searchScore" },
-            searchSources: ["text"]
+            textScore: 1,
+            search_type: 1
           }
         },
         { $limit: limit }
       ]).toArray();
 
-      console.log(`✅ 全文搜索完成 - 找到 ${results.length} 個結果`);
-      return results;
+      console.log(`✅ 全文搜索完成: 找到 ${textResults.length} 個結果`);
+
+      return {
+        results: textResults,
+        breakdown: {
+          search_method: "text_only",
+          total_results: textResults.length
+        }
+      };
 
     } catch (error) {
-      console.error('❌ 全文搜索失敗:', error.message);
-      throw error;
+      console.error(`❌ 全文搜索失敗: ${error.message}`);
+      return { results: [], breakdown: { search_method: "text_error", error: error.message } };
     }
   }
 
-  // 動態權重調整 - 根據查詢類型優化搜索權重
-  getOptimalWeights(query, filters = {}) {
-    // 品牌查詢 - 偏向全文搜索
-    if (this.isPureBrandQuery(query)) {
-      return {
-        vectorPipeline: 0.3,
-        fullTextPipeline: 0.7
-      };
-    }
-    
-    // 描述性查詢 - 偏向向量搜索
-    if (this.isDescriptiveQuery(query)) {
-      return {
-        vectorPipeline: 0.7,
-        fullTextPipeline: 0.3
-      };
-    }
-    
-    // 類別篩選 - 平衡權重
-    if (filters.category) {
-      return {
-        vectorPipeline: 0.5,
-        fullTextPipeline: 0.5
-      };
-    }
-    
-    // 默認平衡權重
-    return {
-      vectorPipeline: 0.6,
-      fullTextPipeline: 0.4
-    };
-  }
-
-  // 判斷是否為純品牌查詢
-  isPureBrandQuery(query) {
-    const brandKeywords = ['nike', 'adidas', 'uniqlo', 'zara', 'h&m'];
-    const lowerQuery = query.toLowerCase();
-    return brandKeywords.some(brand => lowerQuery.includes(brand));
-  }
-
-  // 判斷是否為描述性查詢
-  isDescriptiveQuery(query) {
-    const descriptiveKeywords = ['舒適', '時尚', '休閒', '正式', '運動', '保暖', '透氣', '防水'];
-    return descriptiveKeywords.some(keyword => query.includes(keyword));
-  }
-
-  // LLM 查詢預處理：將自然語言轉換成精確關鍵詞
+  // 查詢預處理 - 使用 LLM 優化搜索關鍵詞
   async preprocessQuery(originalQuery) {
     try {
+      if (!originalQuery || originalQuery.trim() === '') {
+        return '';
+      }
+
       console.log(`🧠 LLM 預處理查詢: "${originalQuery}"`);
 
-      const prompt = `
-你是一個專業的電商搜索關鍵詞提取助理。你的任務是將用戶的自然語言查詢轉換成適合精確匹配的關鍵詞。
+      const prompt = `請分析以下用戶搜索查詢，提取關鍵詞以優化電商搜索：
 
-**重要：無論輸入什麼內容，你都必須按照指定格式輸出「關鍵詞：[關鍵詞]」**
+用戶原始查詢：「${originalQuery}」
 
-用戶查詢：「${originalQuery}」
+請按照以下規則處理：
 
-**關鍵詞提取規則：**
-1. **商品類型轉換**：
-   - 運動服 → 運動
-   - 連帽衫 → 連帽
-   - 牛仔褲 → 牛仔
-   - T恤衫 → T恤
-   - 運動鞋 → 運動
+1. **商品類型**：
+   - 衣服 → 上衣、外套、T恤等具體類型
+   - 鞋子 → 運動鞋、靴子等具體類型
+   - 褲子 → 牛仔褲、短褲等具體類型
 
-2. **品牌名稱**：保持原樣（PUMA、NIKE、URBAN STREET）
+2. **品牌名稱**：保持原樣（NIKE、PUMA、Adidas等）
 
 3. **顏色描述**：保持原樣（黑色、白色、綠色、藍色等）
 
@@ -445,7 +415,7 @@ class SearchService {
 - 「asdfgh」→ 關鍵詞：
 `;
 
-      const response = await openai.chat.completions.create({
+      const response = await this.openai.chat.completions.create({
         model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 100,
@@ -505,7 +475,7 @@ ${productSummary}
 推薦理由：[理由]
 `;
 
-      const response = await openai.chat.completions.create({
+      const response = await this.openai.chat.completions.create({
         model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 200,
@@ -538,6 +508,169 @@ ${productSummary}
       console.error('❌ LLM 推薦失敗:', error.message);
       // 如果 LLM 失敗，返回原始產品列表
       return products;
+    }
+  }
+
+  // 獲取相關商品推薦
+  async getRelatedProducts(database, productId, limit = 4) {
+    try {
+      console.log(`🔍 獲取商品 ID: ${productId} 的相關推薦`);
+      
+      // 1. 獲取目標商品資訊
+      const productsCollection = database.collection('products');
+      const targetProduct = await productsCollection.findOne({ id: parseInt(productId) });
+      
+      if (!targetProduct) {
+        console.log(`❌ 找不到 ID 為 ${productId} 的商品`);
+        return { results: [], breakdown: { search_method: "related_products_fallback", error: "product_not_found" } };
+      }
+      
+      console.log(`✅ 找到目標商品: ${targetProduct.name}`);
+      
+      // 2. 構建查詢條件 - 優先使用向量搜索
+      if (targetProduct.product_embedding) {
+        try {
+          console.log(`🧠 使用向量相似性查找相關商品`);
+          
+          // 使用向量搜索查找相似商品
+          const relatedProducts = await productsCollection.aggregate([
+            {
+              $vectorSearch: {
+                index: "vector_index",
+                path: "product_embedding",
+                queryVector: targetProduct.product_embedding,
+                numCandidates: 20, // 增加候選項以確保有足夠的不同商品
+                limit: limit + 1 // 多取一個，因為會包含商品自身
+              }
+            },
+            {
+              $match: {
+                id: { $ne: targetProduct.id } // 排除目標商品自身
+              }
+            },
+            { $limit: limit },
+            {
+              $addFields: {
+                similarity_score: { $meta: "searchScore" },
+                recommendation_type: "vector_similarity"
+              }
+            }
+          ]).toArray();
+          
+          console.log(`✅ 找到 ${relatedProducts.length} 個相關商品 (向量相似度)`);          
+          return { 
+            results: relatedProducts, 
+            breakdown: { 
+              search_method: "vector_similarity", 
+              total_results: relatedProducts.length 
+            } 
+          };
+        } catch (vectorError) {
+          console.error(`❌ 向量相似度搜索失敗: ${vectorError.message}`);
+          // 繼續執行類別匹配作為後備
+        }
+      }
+      
+      // 3. 後備方案：基於類別和標籤的相關性
+      console.log(`🔍 使用類別和標籤匹配查找相關商品`);
+      
+      // 構建查詢條件
+      const matchConditions = [];
+      
+      // 相同類別
+      if (targetProduct.category) {
+        matchConditions.push({ category: targetProduct.category });
+      }
+      
+      // 相同標籤 (如果有)
+      if (targetProduct.tags && targetProduct.tags.length > 0) {
+        matchConditions.push({ tags: { $in: targetProduct.tags } });
+      }
+      
+      // 如果沒有有效的匹配條件，返回空結果
+      if (matchConditions.length === 0) {
+        console.log(`⚠️ 沒有足夠的匹配條件，返回隨機推薦`);
+        // 返回隨機商品作為最後的後備
+        const randomProducts = await productsCollection.aggregate([
+          { $match: { id: { $ne: targetProduct.id } } },
+          { $sample: { size: limit } },
+          { $addFields: { recommendation_type: "random" } }
+        ]).toArray();
+        
+        return { 
+          results: randomProducts, 
+          breakdown: { 
+            search_method: "random_recommendation", 
+            total_results: randomProducts.length 
+          } 
+        };
+      }
+      
+      // 執行類別/標籤匹配查詢
+      const relatedProducts = await productsCollection.aggregate([
+        {
+          $match: {
+            $and: [
+              { id: { $ne: targetProduct.id } }, // 排除目標商品
+              { $or: matchConditions }
+            ]
+          }
+        },
+        // 計算匹配分數 (類別匹配 +1，每個標籤匹配 +0.5)
+        {
+          $addFields: {
+            categoryScore: {
+              $cond: [
+                { $eq: ["$category", targetProduct.category] },
+                1,
+                0
+              ]
+            },
+            tagScore: {
+              $reduce: {
+                input: { $ifNull: ["$tags", []] },
+                initialValue: 0,
+                in: {
+                  $add: [
+                    "$$value",
+                    {
+                      $cond: [
+                        { $in: ["$$this", { $ifNull: [targetProduct.tags, []] }] },
+                        0.5,
+                        0
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        // 計算總分
+        {
+          $addFields: {
+            matchScore: { $add: ["$categoryScore", "$tagScore"] },
+            recommendation_type: "category_tag_match"
+          }
+        },
+        // 按匹配分數排序
+        { $sort: { matchScore: -1, id: 1 } },
+        { $limit: limit }
+      ]).toArray();
+      
+      console.log(`✅ 找到 ${relatedProducts.length} 個相關商品 (類別/標籤匹配)`);
+      
+      return { 
+        results: relatedProducts, 
+        breakdown: { 
+          search_method: "category_tag_match", 
+          total_results: relatedProducts.length 
+        } 
+      };
+      
+    } catch (error) {
+      console.error(`❌ 獲取相關商品失敗: ${error.message}`);
+      return { results: [], breakdown: { search_method: "related_products_error", error: error.message } };
     }
   }
 }
