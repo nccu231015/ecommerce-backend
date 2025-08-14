@@ -847,22 +847,102 @@ app.post('/debug-hybrid', async (req, res) => {
             
             console.log('✅ Window Functions 支援測試成功');
             
-            // 如果 Window Functions 支援，測試完整的混合搜索
-            const searchResults = await searchService.hybridSearch(database, query, 5, {});
+            // 測試具體的 RRF 混合搜索步驟
+            console.log('🔍 開始逐步測試 RRF 混合搜索...');
             
-            res.json({
-                success: true,
-                windowFunctionsSupported: true,
-                testResults: testResults,
-                searchMethod: searchResults.breakdown.search_method,
-                totalResults: searchResults.results.length,
-                results: searchResults.results.map(r => ({
-                    id: r.id,
-                    name: r.name,
-                    search_type: r.search_type,
-                    similarity_score: r.similarity_score
-                }))
-            });
+            // 步驟1：測試向量搜索
+            const queryVector = await searchService.generateQueryVector(query);
+            if (!queryVector) {
+                throw new Error('向量生成失敗');
+            }
+            console.log(`✅ 向量生成成功，維度: ${queryVector.length}`);
+            
+            // 步驟2：測試向量搜索管道
+            const vectorResults = await database.collection('products').aggregate([
+                {
+                    $vectorSearch: {
+                        index: "vector_index",
+                        path: "product_embedding",
+                        queryVector: queryVector,
+                        numCandidates: 100,
+                        limit: 10,
+                        filter: { available: { $eq: true } }
+                    }
+                },
+                {
+                    $addFields: {
+                        vectorRank: { $meta: "searchScore" },
+                        searchSource: "vector"
+                    }
+                },
+                { $limit: 5 }
+            ]).toArray();
+            console.log(`✅ 向量搜索成功，結果: ${vectorResults.length}`);
+            
+            // 步驟3：測試全文搜索管道
+            const textResults = await database.collection('products').aggregate([
+                {
+                    $search: {
+                        index: "product_text_search",
+                        compound: {
+                            must: [
+                                {
+                                    text: {
+                                        query: query,
+                                        path: "name"
+                                    }
+                                }
+                            ],
+                            filter: [
+                                { equals: { path: "available", value: true } }
+                            ]
+                        }
+                    }
+                },
+                {
+                    $addFields: {
+                        textRank: { $meta: "searchScore" },
+                        searchSource: "text"
+                    }
+                },
+                { $limit: 5 }
+            ]).toArray();
+            console.log(`✅ 全文搜索成功，結果: ${textResults.length}`);
+            
+            // 步驟4：測試完整的 RRF 混合搜索
+            try {
+                const searchResults = await searchService.hybridSearch(database, query, 5, {});
+                
+                res.json({
+                    success: true,
+                    windowFunctionsSupported: true,
+                    testResults: testResults,
+                    vectorResults: vectorResults.length,
+                    textResults: textResults.length,
+                    finalSearchMethod: searchResults.breakdown.search_method,
+                    totalResults: searchResults.results.length,
+                    rrfSuccess: searchResults.breakdown.search_method.includes('rrf'),
+                    results: searchResults.results.map(r => ({
+                        id: r.id,
+                        name: r.name,
+                        search_type: r.search_type,
+                        similarity_score: r.similarity_score
+                    }))
+                });
+                
+            } catch (rrfError) {
+                console.error('❌ RRF 混合搜索失敗:', rrfError.message);
+                
+                res.json({
+                    success: false,
+                    windowFunctionsSupported: true,
+                    testResults: testResults,
+                    vectorResults: vectorResults.length,
+                    textResults: textResults.length,
+                    rrfError: rrfError.message,
+                    rrfErrorStack: rrfError.stack
+                });
+            }
             
         } catch (windowError) {
             console.error('❌ Window Functions 不支援:', windowError.message);
