@@ -593,10 +593,10 @@ app.post("/ai-search", async (req, res) => {
         console.log(`✅ AI搜索完成: 找到 ${searchResults.results.length} 個結果`);
         
         // 提取 LLM 推薦資訊
-        const aiRecommended = searchResults.results.find(product => product.ai_recommended);
+        const aiRecommended = searchResults.results.find(product => product.llm_recommended);
         const llmRecommendation = aiRecommended ? {
             product_name: aiRecommended.name,
-            reason: aiRecommended.ai_reason,
+            reason: aiRecommended.recommendation_reason,
             confidence: "高"
         } : null;
         
