@@ -557,10 +557,22 @@ ${productSummary}
       
       console.log(`✅ 找到目標商品: ${targetProduct.name}`);
       
-      // 2. 構建查詢條件 - 優先使用向量搜索
+      // 2. 構建基礎過濾條件 - 必須同類別 (men/women/kid)
+      const baseFilter = {
+        id: { $ne: targetProduct.id }, // 排除目標商品自身
+        available: { $eq: true } // 只推薦可用商品
+      };
+      
+      // 添加類別過濾 - 確保只推薦同類別商品
+      if (targetProduct.category) {
+        baseFilter.category = { $eq: targetProduct.category };
+        console.log(`🎯 限制推薦類別: ${targetProduct.category}`);
+      }
+
+      // 3. 優先使用向量搜索
       if (targetProduct.product_embedding) {
         try {
-          console.log(`🧠 使用向量相似性查找相關商品`);
+          console.log(`🧠 使用向量相似性查找相關商品 (限制類別: ${targetProduct.category})`);
           
           // 使用向量搜索查找相似商品
           const relatedProducts = await productsCollection.aggregate([
@@ -569,13 +581,9 @@ ${productSummary}
                 index: "vector_index",
                 path: "product_embedding",
                 queryVector: targetProduct.product_embedding,
-                numCandidates: 20, // 增加候選項以確保有足夠的不同商品
-                limit: limit + 1 // 多取一個，因為會包含商品自身
-              }
-            },
-            {
-              $match: {
-                id: { $ne: targetProduct.id } // 排除目標商品自身
+                numCandidates: 50, // 增加候選項以確保有足夠的同類別商品
+                limit: limit * 3, // 多取一些，因為需要過濾類別
+                filter: baseFilter // 在向量搜索階段就過濾類別
               }
             },
             { $limit: limit },
@@ -601,28 +609,22 @@ ${productSummary}
         }
       }
       
-      // 3. 後備方案：基於類別和標籤的相關性
-      console.log(`🔍 使用類別和標籤匹配查找相關商品`);
+      // 4. 後備方案：基於標籤的相關性（已確保同類別）
+      console.log(`🔍 使用標籤匹配查找相關商品 (限制類別: ${targetProduct.category})`);
       
-      // 構建查詢條件
-      const matchConditions = [];
-      
-      // 相同類別
-      if (targetProduct.category) {
-        matchConditions.push({ category: targetProduct.category });
-      }
+      // 構建標籤匹配條件
+      const tagMatchConditions = [];
       
       // 相同標籤 (如果有)
       if (targetProduct.tags && targetProduct.tags.length > 0) {
-        matchConditions.push({ tags: { $in: targetProduct.tags } });
+        tagMatchConditions.push({ tags: { $in: targetProduct.tags } });
       }
       
-      // 如果沒有有效的匹配條件，返回隨機推薦
-      if (matchConditions.length === 0) {
-        console.log(`⚠️ 沒有足夠的匹配條件，返回隨機推薦`);
-        // 返回隨機商品作為最後的後備
+      // 如果沒有標籤，返回同類別的隨機推薦
+      if (tagMatchConditions.length === 0) {
+        console.log(`⚠️ 沒有標籤條件，返回同類別隨機推薦`);
         const randomProducts = await productsCollection.aggregate([
-          { $match: { id: { $ne: targetProduct.id } } },
+          { $match: baseFilter }, // 使用基礎過濾條件（已包含類別限制）
           { $sample: { size: limit } },
           { $addFields: { recommendation_type: "random" } }
         ]).toArray();
@@ -631,31 +633,25 @@ ${productSummary}
           results: randomProducts, 
           breakdown: { 
             search_method: "random_recommendation", 
-            total_results: randomProducts.length 
+            total_results: randomProducts.length,
+            category_filter: targetProduct.category
           } 
         };
       }
       
-      // 執行類別/標籤匹配查詢
+      // 執行標籤匹配查詢（已限制同類別）
       const relatedProducts = await productsCollection.aggregate([
         {
           $match: {
             $and: [
-              { id: { $ne: targetProduct.id } }, // 排除目標商品
-              { $or: matchConditions }
+              baseFilter, // 基礎過濾條件（包含類別限制）
+              { $or: tagMatchConditions }
             ]
           }
         },
-        // 計算匹配分數 (類別匹配 +1，每個標籤匹配 +0.5)
+        // 計算標籤匹配分數 (每個標籤匹配 +0.5，類別已在前置條件保證)
         {
           $addFields: {
-            categoryScore: {
-              $cond: [
-                { $eq: ["$category", targetProduct.category] },
-                1,
-                0
-              ]
-            },
             tagScore: {
               $reduce: {
                 input: { $ifNull: ["$tags", []] },
@@ -673,18 +669,12 @@ ${productSummary}
                   ]
                 }
               }
-            }
-          }
-        },
-        // 計算總分
-        {
-          $addFields: {
-            matchScore: { $add: ["$categoryScore", "$tagScore"] },
+            },
             recommendation_type: "category_tag_match"
           }
         },
-        // 按匹配分數排序
-        { $sort: { matchScore: -1, id: 1 } },
+        // 按標籤匹配分數排序
+        { $sort: { tagScore: -1, id: 1 } },
         { $limit: limit }
       ]).toArray();
       
@@ -694,7 +684,8 @@ ${productSummary}
         results: relatedProducts, 
         breakdown: { 
           search_method: "category_tag_match", 
-          total_results: relatedProducts.length 
+          total_results: relatedProducts.length,
+          category_filter: targetProduct.category
         } 
       };
       
