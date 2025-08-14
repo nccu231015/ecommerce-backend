@@ -121,10 +121,11 @@ class SearchService {
             index: "product_text_search",
             compound: {
               must: processedQuery.split(' ').map(keyword => ({
-                // 每個關鍵詞都必須在商品名稱中出現
-                text: {
-                  query: keyword,
-                  path: "name"
+                // 每個關鍵詞都必須在商品名稱中出現 - 使用 wildcard 確保包含
+                wildcard: {
+                  query: `*${keyword}*`,
+                  path: "name",
+                  allowAnalyzedField: true
                 }
               })),
               should: [
