@@ -713,26 +713,25 @@ ${productSummary}
     try {
       console.log(`🔍 使用 LLM 比較商品材質...`);
       
-      const prompt = `請比較以下兩個商品的材質特性，並提供簡短的比較分析：
+      const prompt = `請比較以下兩個商品的材質特性，用簡潔易讀的方式呈現：
 
-第一個商品：${originalProduct.name || '未知'}
+商品1：${originalProduct.name || '未知'}
 描述：${originalProduct.description || '無描述'}
 
-第二個商品：${recommendedProduct.name || '未知'}  
+商品2：${recommendedProduct.name || '未知'}  
 描述：${recommendedProduct.description || '無描述'}
 
-請針對材質特性進行比較，包括：
-1. 材質類型差異
-2. 舒適度比較  
-3. 耐用性分析
-4. 適用場景差異
+請用以下格式輸出比較結果：
 
-重要要求：
-- 必須直接使用商品的完整名稱（如「${originalProduct.name}」和「${recommendedProduct.name}」），絕對不可以用「商品A」、「商品B」、「第一個商品」、「第二個商品」等任何代稱
-- 用繁體中文回答，控制在150字以內
-- 格式如下：材質比較：[直接使用商品名稱的簡短比較分析]
+材質比較：
+🔸 材質差異：[簡述兩者材質的不同]
+🔸 舒適度：[比較舒適度特點]
+🔸 適用場景：[各自適合的使用場景]
 
-範例格式：「黑色格紋短版仿皮草外套使用...，而藍色運動連帽衫採用...」`;
+要求：
+- 直接使用商品名稱，不用代稱
+- 每個要點控制在30字內
+- 用條列式呈現，清晰易讀`;
 
       const response = await openai.chat.completions.create({
         model: "gpt-4o",
