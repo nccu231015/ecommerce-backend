@@ -620,6 +620,52 @@ app.post("/ai-search", async (req, res) => {
     }
 });
 
+// API for getting a single product by ID - 獲取單個商品詳情
+app.get("/product/:productId", async (req, res) => {
+    try {
+        const { productId } = req.params;
+        
+        if (!productId) {
+            return res.status(400).json({
+                success: false,
+                message: "商品ID不能為空"
+            });
+        }
+        
+        console.log(`🔍 獲取商品 ID: ${productId} 的詳細信息`);
+        
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        const product = await productsCollection.findOne({ 
+            id: parseInt(productId),
+            available: true 
+        });
+        
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                message: "商品不存在或已下架"
+            });
+        }
+        
+        console.log(`✅ 成功獲取商品: ${product.name}`);
+        
+        res.json({
+            success: true,
+            product: product
+        });
+        
+    } catch (error) {
+        console.error("❌ 獲取商品詳情失敗:", error.message);
+        res.status(500).json({
+            success: false,
+            message: "獲取商品詳情服務暫時不可用",
+            error: error.message
+        });
+    }
+});
+
 // API for related products - 獲取相關商品推薦
 app.get("/related-products/:productId", async (req, res) => {
     try {
@@ -653,6 +699,66 @@ app.get("/related-products/:productId", async (req, res) => {
         res.status(500).json({
             success: false,
             message: "相關商品推薦服務暫時不可用",
+            error: error.message
+        });
+    }
+});
+
+// API for comparing materials between two products using LLM - 使用LLM比較兩個商品的材質
+app.post("/compare-materials", async (req, res) => {
+    try {
+        const { originalProductId, recommendedProductId } = req.body;
+        
+        if (!originalProductId || !recommendedProductId) {
+            return res.status(400).json({
+                success: false,
+                message: "需要提供兩個商品ID進行比較"
+            });
+        }
+        
+        console.log(`🔍 材質比較請求: ${originalProductId} vs ${recommendedProductId}`);
+        
+        const database = await connectToDatabase();
+        const productsCollection = database.collection('products');
+        
+        // 獲取兩個商品的詳細信息
+        const [originalProduct, recommendedProduct] = await Promise.all([
+            productsCollection.findOne({ id: parseInt(originalProductId), available: true }),
+            productsCollection.findOne({ id: parseInt(recommendedProductId), available: true })
+        ]);
+        
+        if (!originalProduct || !recommendedProduct) {
+            return res.status(404).json({
+                success: false,
+                message: "找不到指定的商品"
+            });
+        }
+        
+        // 使用 LLM 進行材質比較
+        const materialComparison = await searchService.compareProductMaterials(originalProduct, recommendedProduct);
+        
+        console.log(`✅ 材質比較完成: ${materialComparison.comparison.substring(0, 50)}...`);
+        
+        res.json({
+            success: true,
+            originalProduct: {
+                id: originalProduct.id,
+                name: originalProduct.name,
+                description: originalProduct.description
+            },
+            recommendedProduct: {
+                id: recommendedProduct.id,
+                name: recommendedProduct.name,
+                description: recommendedProduct.description
+            },
+            materialComparison: materialComparison
+        });
+        
+    } catch (error) {
+        console.error("❌ 材質比較失敗:", error.message);
+        res.status(500).json({
+            success: false,
+            message: "材質比較服務暫時不可用",
             error: error.message
         });
     }

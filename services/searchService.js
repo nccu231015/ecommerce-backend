@@ -694,6 +694,83 @@ ${productSummary}
       return { results: [], breakdown: { search_method: "related_products_error", error: error.message } };
     }
   }
+
+  // 使用 LLM 比較兩個商品的材質描述
+  async compareProductMaterials(originalProduct, recommendedProduct) {
+    if (!this.openai) {
+      console.log('⚠️ OpenAI 未配置，跳過材質比較');
+      return {
+        comparison: "材質比較功能暫時不可用",
+        confidence: "低"
+      };
+    }
+
+    try {
+      console.log(`🔍 使用 LLM 比較商品材質...`);
+      
+      const prompt = `請比較以下兩個商品的材質特性，並提供簡短的比較分析：
+
+商品A（原商品）：
+名稱：${originalProduct.name || '未知'}
+描述：${originalProduct.description || '無描述'}
+
+商品B（推薦商品）：
+名稱：${recommendedProduct.name || '未知'}
+描述：${recommendedProduct.description || '無描述'}
+
+請針對材質特性進行比較，包括：
+1. 材質類型差異
+2. 舒適度比較
+3. 耐用性分析
+4. 適用場景差異
+
+請用繁體中文回答，控制在100字以內，格式如下：
+材質比較：[簡短比較分析]`;
+
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "你是一個專業的服裝材質分析師，擅長比較不同商品的材質特性。請提供客觀、專業的材質比較分析。"
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 200,
+        temperature: 0.3
+      });
+
+      const comparison = response.choices[0]?.message?.content?.trim();
+      
+      if (comparison && comparison.includes('材質比較：')) {
+        const analysisText = comparison.split('材質比較：')[1]?.trim();
+        console.log(`✅ LLM 材質比較完成: ${analysisText.substring(0, 50)}...`);
+        
+        return {
+          comparison: analysisText,
+          confidence: "高",
+          generated_at: new Date().toISOString()
+        };
+      } else {
+        console.log(`⚠️ LLM 材質比較格式異常: ${comparison}`);
+        return {
+          comparison: "材質比較分析格式異常，請稍後再試",
+          confidence: "低"
+        };
+      }
+
+    } catch (error) {
+      console.error(`❌ LLM 材質比較失敗: ${error.message}`);
+      return {
+        comparison: "材質比較暫時不可用，請稍後再試",
+        confidence: "低",
+        error: error.message
+      };
+    }
+  }
 }
 
 module.exports = SearchService;
