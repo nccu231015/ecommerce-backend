@@ -715,22 +715,24 @@ ${productSummary}
       
       const prompt = `請比較以下兩個商品的材質特性，並提供簡短的比較分析：
 
-商品A（原商品）：
-名稱：${originalProduct.name || '未知'}
+第一個商品：${originalProduct.name || '未知'}
 描述：${originalProduct.description || '無描述'}
 
-商品B（推薦商品）：
-名稱：${recommendedProduct.name || '未知'}
+第二個商品：${recommendedProduct.name || '未知'}  
 描述：${recommendedProduct.description || '無描述'}
 
 請針對材質特性進行比較，包括：
 1. 材質類型差異
-2. 舒適度比較
+2. 舒適度比較  
 3. 耐用性分析
 4. 適用場景差異
 
-請用繁體中文回答，控制在100字以內，格式如下：
-材質比較：[簡短比較分析]`;
+重要要求：
+- 必須直接使用商品的完整名稱（如「${originalProduct.name}」和「${recommendedProduct.name}」），絕對不可以用「商品A」、「商品B」、「第一個商品」、「第二個商品」等任何代稱
+- 用繁體中文回答，控制在150字以內
+- 格式如下：材質比較：[直接使用商品名稱的簡短比較分析]
+
+範例格式：「黑色格紋短版仿皮草外套使用...，而藍色運動連帽衫採用...」`;
 
       const response = await openai.chat.completions.create({
         model: "gpt-4o",
