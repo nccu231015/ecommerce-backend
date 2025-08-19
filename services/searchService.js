@@ -378,6 +378,11 @@ class SearchService {
 
   // LLM 查詢預處理：將自然語言轉換成精確關鍵詞
   async preprocessQuery(originalQuery) {
+    if (!this.openai) {
+      console.log('⚠️ OpenAI 未配置，跳過查詢預處理');
+      return originalQuery;
+    }
+
     try {
       console.log(`🧠 LLM 預處理查詢: "${originalQuery}"`);
 
@@ -697,7 +702,7 @@ ${productSummary}
 
   // 使用 LLM 比較兩個商品的材質描述
   async compareProductMaterials(originalProduct, recommendedProduct) {
-    if (!this.openai) {
+    if (!openai) {
       console.log('⚠️ OpenAI 未配置，跳過材質比較');
       return {
         comparison: "材質比較功能暫時不可用",
@@ -727,7 +732,7 @@ ${productSummary}
 請用繁體中文回答，控制在100字以內，格式如下：
 材質比較：[簡短比較分析]`;
 
-      const response = await this.openai.chat.completions.create({
+      const response = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
           {
